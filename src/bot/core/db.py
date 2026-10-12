@@ -103,10 +103,12 @@ SCHEMA = [
 ]
 
 
-def connect(path: Path) -> sqlite3.Connection:
-    """Подключение с созданием таблиц. Строки доступны по имени колонки."""
+def connect(path: Path, threads: bool = False) -> sqlite3.Connection:
+    """Подключение с созданием таблиц. Строки доступны по имени колонки.
+    threads=True — соединение используется из нескольких потоков (живой бот: поток
+    WebSocket и поток команд Telegram); тогда вызывающий код сам держит блокировку."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, timeout=30)
+    conn = sqlite3.connect(path, timeout=30, check_same_thread=not threads)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")

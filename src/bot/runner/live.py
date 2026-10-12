@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import argparse
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -114,6 +115,8 @@ class LiveBot:
         self.last_minute: dict[str, pd.Timestamp] = {}
         self.minutes_seen = 0
         self.state: RiskState | None = None
+        # Свечи приходят из потока WebSocket, команды — из потока Telegram.
+        self.lock = threading.RLock()
 
     # --- запуск и состояние риска ----------------------------------------------------
 
@@ -195,6 +198,10 @@ class LiveBot:
     def on_candles(self, symbol: str, _: pd.DataFrame) -> None:
         """Колбэк LiveFeed. Читаем из хранилища всё после последней обработанной минуты:
         так не теряются свечи, дозагруженные после обрыва связи."""
+        with self.lock:
+            self._process_new_minutes(symbol)
+
+    def _process_new_minutes(self, symbol: str) -> None:
         last = self.last_minute.get(symbol)
         start = last + MINUTE if last is not None else self.now().floor("1min") - MINUTE * 2
         minutes = self.storage.read_candles(symbol, "1m", start=start)
@@ -438,6 +445,10 @@ class LiveBot:
 
     def kill(self, reason: str) -> None:
         """Отменить ордера, закрыть позиции, не открывать новых до /resume."""
+        with self.lock:
+            self._kill(reason)
+
+    def _kill(self, reason: str) -> None:
         self.store.request_kill(reason)
         self.event("kill", f"аварийная остановка: {reason}", "error")
         for symbol in self.settings.symbols:
@@ -464,6 +475,10 @@ class LiveBot:
 
     def resume(self) -> None:
         """Ручное снятие остановки: флаг, файл data/KILL, остановка по просадке и пауза."""
+        with self.lock:
+            self._resume()
+
+    def _resume(self) -> None:
         self.store.clear_kill()
         if self.kill_file.exists():
             self.kill_file.unlink()
@@ -476,6 +491,10 @@ class LiveBot:
         self.notify("Торговля возобновлена")
 
     def status_text(self) -> str:
+        with self.lock:
+            return self._status_text()
+
+    def _status_text(self) -> str:
         balance = self.broker.get_balance()
         lines = [
             f"Режим: {self.broker.name}. Капитал: {balance.equity:.2f}",
@@ -513,7 +532,7 @@ def main(argv: list[str] | None = None) -> None:
 
     data_dir = cfg.resolve(cfg.data.dir)
     storage = Storage(data_dir)
-    store = Store(connect(db_path(data_dir)), settings.mode)
+    store = Store(connect(db_path(data_dir), threads=True), settings.mode)
     broker: Broker
     if settings.mode == "demo":
         broker = BybitBroker.demo(cfg.secrets, cfg.instruments)
@@ -521,15 +540,22 @@ def main(argv: list[str] | None = None) -> None:
         costs = CostModel.from_config(cfg.costs)
         broker = PaperBroker(costs, cfg.instruments, settings.paper_capital)
 
-    bot = LiveBot(cfg, settings, broker, store, storage)
+    from bot.notify.telegram import TelegramNotifier
+
+    notifier = TelegramNotifier.from_secrets(cfg.secrets)
+    bot = LiveBot(cfg, settings, broker, store, storage, notify=notifier.send)
     downloader = Downloader(make_public_client(), storage, category=cfg.data.category)
     feed = LiveFeed(storage, downloader, settings.symbols, on_candle=bot.on_candles)
     for symbol in settings.symbols:  # сначала догрузить историю, потом стартовать
         feed.backfill(symbol)
     bot.start()
+    notifier.start_commands(bot)
     print(f"Бот работает в режиме {settings.mode}. Остановить: Ctrl+C")
     print("После остановки позиции остаются на бирже со стопами.")
-    feed.run(args.hours)
+    try:
+        feed.run(args.hours)
+    finally:
+        notifier.stop()
 
 
 if __name__ == "__main__":
