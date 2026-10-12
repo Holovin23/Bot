@@ -56,3 +56,13 @@ limits:
   stale_bars: 2
   default_min_rr: 1.5
   min_rr: {mean_reversion: 1.0, random_entry: 1.0}
+
+# Этап 8: профиль риска реального счёта (используется только в режиме live, который
+# выключен по умолчанию). Код не примет значения мягче указанных здесь границ.
+live_risk:
+  risk_per_trade: 0.0025
+  max_leverage: 3.0
+  max_positions: 1
+  max_total_risk: 0.005
+  daily_loss: 0.01
+  max_drawdown: 0.05

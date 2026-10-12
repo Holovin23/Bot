@@ -182,3 +182,20 @@ def test_backtest_uses_the_same_signal_checks() -> None:
     assert plain.trades
     assert not checked.trades
     assert all(s.reason.startswith("риск: 2:") for s in checked.skipped)
+
+
+def test_live_profile_is_stricter_and_daily_loss_halts() -> None:
+    from bot.core.config import Config, LiveRiskConfig, Secrets
+
+    cfg = Config(secrets=Secrets(_env_file=None))  # type: ignore[call-arg]
+    live = cfg.for_live()
+    assert live.risk.risk_per_trade == 0.0025 and live.limits.max_positions == 1
+    assert live.limits.daily_loss == 0.01 and live.limits.daily_loss_halts
+    assert cfg.limits.daily_loss_halts is False  # демо-настройки не тронуты
+    with pytest.raises(ValueError):
+        LiveRiskConfig(risk_per_trade=0.005)  # больше 0,25% нельзя
+    # Капитал 10 000 → 9 890 за день: −1,1% ≥ 1% → полная остановка, а не пауза
+    st = update_state(state(), 9_890, date(2026, 10, 12), live.limits)
+    assert st.halted is not None and "ручной" in st.halted and st.paused is None
+    # На демо тот же убыток — ниже 2%, торговля продолжается
+    assert update_state(state(), 9_890, date(2026, 10, 12), LIMITS).paused is None

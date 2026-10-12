@@ -122,8 +122,12 @@ def update_state(state: RiskState, equity: float, today: date, limits: LimitsCon
     state = replace(state, equity=equity, peak_equity=max(state.peak_equity, equity))
     if state.day_start_equity > 0:
         day_loss = (state.day_start_equity - equity) / state.day_start_equity
-        if day_loss >= limits.daily_loss and not state.paused:
-            state = replace(state, paused=f"дневной убыток {day_loss:.1%}")
+        if day_loss >= limits.daily_loss:
+            reason = f"дневной убыток {day_loss:.1%}"
+            if limits.daily_loss_halts and not state.halted:
+                state = replace(state, halted=reason + " (реальный счёт: только ручной запуск)")
+            elif not state.paused:
+                state = replace(state, paused=reason)
     if state.peak_equity > 0:
         drawdown = (state.peak_equity - equity) / state.peak_equity
         if drawdown >= limits.max_drawdown and not state.halted:

@@ -73,6 +73,8 @@ class LimitsConfig(BaseModel):
     max_cost_share: float = Field(default=0.2, gt=0, le=0.2)
     stale_bars: int = Field(default=2, ge=1, le=2)
     default_min_rr: float = Field(default=1.5, ge=1.0)
+    # Этап 8 (реальный счёт): дневной убыток останавливает торговлю до ручного /resume
+    daily_loss_halts: bool = False
     # Для отдельных стратегий (05, проверка 2): Mean Reversion — 1,0. random_entry —
     # исследовательская база, в сравнении получает R:R той стратегии, которую изображает.
     min_rr: dict[str, float] = Field(
@@ -85,6 +87,17 @@ class LimitsConfig(BaseModel):
         if any(v < 1.0 for v in value.values()):
             raise ValueError("минимальный R:R не может быть меньше 1,0 (docs/05)")
         return value
+
+
+class LiveRiskConfig(BaseModel):
+    """Этап 8: профиль риска для реального счёта. Только строже, чем на демо."""
+
+    risk_per_trade: float = Field(default=0.0025, gt=0, le=0.0025)
+    max_leverage: float = Field(default=3.0, gt=0, le=3.0)
+    max_positions: int = Field(default=1, ge=1, le=2)
+    max_total_risk: float = Field(default=0.005, gt=0, le=0.015)
+    daily_loss: float = Field(default=0.01, gt=0, le=0.02)
+    max_drawdown: float = Field(default=0.05, gt=0, le=0.10)
 
 
 class Secrets(BaseSettings):
@@ -125,7 +138,25 @@ class Config(BaseModel):
     instruments: dict[str, InstrumentConfig] = Field(default_factory=dict)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
+    live_risk: LiveRiskConfig = Field(default_factory=LiveRiskConfig)
     secrets: Secrets
+
+    def for_live(self) -> Config:
+        """Копия настроек с профилем риска реального счёта (этап 8)."""
+        lr = self.live_risk
+        risk = self.risk.model_copy(
+            update={"risk_per_trade": lr.risk_per_trade, "max_leverage": lr.max_leverage}
+        )
+        limits = self.limits.model_copy(
+            update={
+                "max_positions": lr.max_positions,
+                "max_total_risk": lr.max_total_risk,
+                "daily_loss": lr.daily_loss,
+                "max_drawdown": lr.max_drawdown,
+                "daily_loss_halts": True,
+            }
+        )
+        return self.model_copy(update={"risk": risk, "limits": limits})
 
     def resolve(self, path: Path) -> Path:
         """Относительные пути из конфига считаются от корня проекта."""
