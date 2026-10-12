@@ -91,6 +91,9 @@ class ScriptedBroker:
 
     def set_leverage(self, symbol: str, leverage: float) -> None: ...
 
+    def last_exit(self, symbol: str) -> None:
+        return None
+
 
 def no_sleep(_: float) -> None:
     pass

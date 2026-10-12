@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -46,6 +47,17 @@ class DuplicateOrderError(BrokerError):
     """Ордер с таким orderLinkId уже есть — значит, прошлая попытка дошла."""
 
 
+@dataclass(frozen=True)
+class ExitInfo:
+    """Последнее закрытие позиции по символу (стоп, тейк или наш reduceOnly-ордер)."""
+
+    symbol: str
+    exit_price: float
+    exit_time: datetime
+    net_pnl: float  # после комиссий; funding — если брокер его знает
+    reason: str  # stop | take | manual | unknown
+
+
 class Broker(Protocol):
     name: str  # paper | demo | live
 
@@ -64,6 +76,8 @@ class Broker(Protocol):
     ) -> None: ...
 
     def set_leverage(self, symbol: str, leverage: float) -> None: ...
+
+    def last_exit(self, symbol: str) -> ExitInfo | None: ...
 
 
 def entry_side(side: Side) -> OrderSide:
