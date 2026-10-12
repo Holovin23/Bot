@@ -20,6 +20,7 @@
 | — | [tasks/stage-4.md](tasks/stage-4.md) | Задачи этапа 4: validation, walk-forward, hold-out, устойчивость |
 | — | [tasks/stage-5.md](tasks/stage-5.md) | Задачи этапа 5: веб-интерфейс (сделки, капитал, запуск бэктеста) |
 | — | [tasks/stage-6.md](tasks/stage-6.md) | Задачи этапа 6: режим рынка, ML-фильтр, Telegram и Claude API |
+| — | [tasks/stage-7.md](tasks/stage-7.md) | Задачи этапа 7: лимиты риска, paper и демо-брокер, runner, уведомления, kill switch |
 
 Инструкции для ИИ-ассистента, который пишет код, лежат в [`../CLAUDE.md`](../CLAUDE.md).
 
