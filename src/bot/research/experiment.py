@@ -29,6 +29,7 @@ from bot.core.config import PROJECT_ROOT, Config, load_config
 from bot.data.resample import resample_candles
 from bot.data.storage import Storage
 from bot.research.baseline import BaselineComparison, compare_with_random
+from bot.research.grid import count_variants, grid_summary, parse_grid, render_grid, run_grid
 from bot.research.journal import JournalEntry, append_entry
 from bot.strategies.base import Strategy
 from bot.strategies.registry import create_strategy
@@ -206,6 +207,78 @@ def journal_entry(
     )
 
 
+def _load(
+    cfg: Config, storage: Storage, symbol: str, start: pd.Timestamp, end: pd.Timestamp
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    candles = storage.read_candles(symbol, "1m", start, end)
+    if candles.empty:
+        raise SystemExit(f"Нет 1m-свечей {symbol} за период. Сначала загрузите историю.")
+    if symbol not in cfg.instruments:
+        raise SystemExit(f"Нет параметров инструмента {symbol} в config/default.yaml")
+    return candles, storage.read_funding(symbol, start, end)
+
+
+def _period(start: pd.Timestamp, end: pd.Timestamp) -> str:
+    return f"{start:%Y-%m-%d} — {end - pd.Timedelta(minutes=1):%Y-%m-%d} (in-sample)"
+
+
+def _shown(path: Path) -> str:
+    return (
+        path.relative_to(PROJECT_ROOT) if path.is_relative_to(PROJECT_ROOT) else path
+    ).as_posix()
+
+
+def _run_grid(
+    cfg: Config,
+    storage: Storage,
+    name: str,
+    symbol: str,
+    timeframe: str,
+    params: dict[str, Any],
+    grid: dict[str, list[Any]],
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    journal: Path,
+) -> pd.DataFrame:
+    candles, funding = _load(cfg, storage, symbol, start, end)
+    total = count_variants(grid)
+    print(f"Перебор {name} {symbol} {timeframe}: {total} вариантов", flush=True)
+
+    def show(done: int, count: int) -> None:
+        print(f"  вариант {done}/{count}", flush=True)
+
+    table = run_grid(name, timeframe, symbol, candles, cfg, grid, params, funding, show)
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    folder = cfg.resolve(cfg.data.dir) / "backtests" / f"{stamp}_grid_{name}_{symbol}_{timeframe}"
+    folder.mkdir(parents=True, exist_ok=True)
+    table.to_csv(folder / "grid.csv", index=False)
+    report = folder / "grid.md"
+    report.write_text(render_grid(table, grid, f"{name} {symbol} {timeframe}"), encoding="utf-8")
+
+    strategy = create_strategy(name, timeframe, params)
+    hypothesis, rationale = HYPOTHESES.get(name, ("—", "—"))
+    grid_text = "; ".join(f"{k} ∈ {{{', '.join(map(str, v))}}}" for k, v in grid.items())
+    entry = JournalEntry(
+        title=f"{name} {strategy.version} {symbol} {timeframe} — перебор",
+        date=datetime.now(UTC).strftime("%Y-%m-%d"),
+        hypothesis=hypothesis,
+        rationale=rationale,
+        period=_period(start, end),
+        params=f"перебор {grid_text}; остальные по умолчанию"
+        + (f", {', '.join(f'{k}={v}' for k, v in params.items())}" if params else ""),
+        variants=total,
+        criteria=CRITERIA_TEXT,
+        result=grid_summary(table, MIN_PROFIT_FACTOR, MIN_TRADES),
+        verdict="выбор варианта из центра «плато» — за владельцем; выбранный вариант "
+        f"прогнать без --grid с --param ... --variants {total}",
+        report=_shown(report),
+    )
+    number = append_entry(journal, entry)
+    print(f"  EXP-{number:03d}: {entry.result}")
+    print(f"  Таблица: {report}")
+    return table
+
+
 def _run_one(
     cfg: Config,
     storage: Storage,
@@ -217,13 +290,9 @@ def _run_one(
     end: pd.Timestamp,
     runs: int,
     journal: Path,
+    variants: int = 1,
 ) -> Experiment:
-    candles = storage.read_candles(symbol, "1m", start, end)
-    if candles.empty:
-        raise SystemExit(f"Нет 1m-свечей {symbol} за период. Сначала загрузите историю.")
-    if symbol not in cfg.instruments:
-        raise SystemExit(f"Нет параметров инструмента {symbol} в config/default.yaml")
-    funding = storage.read_funding(symbol, start, end)
+    candles, funding = _load(cfg, storage, symbol, start, end)
     strategy = create_strategy(name, timeframe, params)
     print(f"Эксперимент {name} {symbol} {timeframe}: {len(candles)} минутных свечей", flush=True)
     exp = run_experiment(strategy, symbol, candles, cfg, funding, runs=runs, progress=True)
@@ -234,9 +303,9 @@ def _run_one(
     report = folder / "report.md"
     with report.open("a", encoding="utf-8") as fh:
         fh.write(render_baselines(exp))
-    period = f"{start:%Y-%m-%d} — {end - pd.Timedelta(minutes=1):%Y-%m-%d} (in-sample)"
-    shown = report.relative_to(PROJECT_ROOT) if report.is_relative_to(PROJECT_ROOT) else report
-    number = append_entry(journal, journal_entry(exp, period, shown.as_posix()))
+    number = append_entry(
+        journal, journal_entry(exp, _period(start, end), _shown(report), variants)
+    )
     m = exp.metrics
     print(
         f"  EXP-{number:03d}: сделок {m.trades}, PF {_f(m.profit_factor)}, "
@@ -258,6 +327,15 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--param", action="append", help="параметр стратегии: ключ=значение")
     parser.add_argument("--runs", type=int, default=200, help="прогонов случайных входов")
     parser.add_argument("--journal", default="research/experiments.md")
+    parser.add_argument(
+        "--grid", action="append", help="перебор параметра: ключ=v1,v2,... (до 3 параметров)"
+    )
+    parser.add_argument(
+        "--variants",
+        type=int,
+        default=1,
+        help="сколько вариантов было проверено до этого запуска (для журнала)",
+    )
     args = parser.parse_args(argv)
 
     start = pd.Timestamp(args.start, tz="UTC")
@@ -267,6 +345,12 @@ def main(argv: list[str] | None = None) -> None:
     storage = Storage(cfg.resolve(cfg.data.dir))
     journal = cfg.resolve(Path(args.journal))
     params = _parse_params(args.param)
+    try:
+        grid = parse_grid(args.grid)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if args.all and grid:
+        parser.error("--grid запускается для одной стратегии, без --all")
 
     if args.all and params:
         parser.error("--param нельзя вместе с --all: у стратегий разные параметры")
@@ -282,7 +366,22 @@ def main(argv: list[str] | None = None) -> None:
     else:
         parser.error("нужны --strategy и --symbol, или --all")
     for name, symbol, tf in jobs:
-        _run_one(cfg, storage, name, symbol, tf, params, start, end, args.runs, journal)
+        if grid:
+            _run_grid(cfg, storage, name, symbol, tf, params, grid, start, end, journal)
+        else:
+            _run_one(
+                cfg,
+                storage,
+                name,
+                symbol,
+                tf,
+                params,
+                start,
+                end,
+                args.runs,
+                journal,
+                args.variants,
+            )
     print(f"Журнал: {journal}")
 
 
