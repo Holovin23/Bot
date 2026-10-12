@@ -45,7 +45,7 @@ SCHEMA = [
     # Этап 7: живой бот (paper / demo)
     """
     CREATE TABLE IF NOT EXISTS live_trades (
-        signal_id TEXT PRIMARY KEY,
+        signal_id TEXT NOT NULL,
         mode TEXT NOT NULL,           -- paper | demo | live
         strategy TEXT NOT NULL,
         symbol TEXT NOT NULL,
@@ -64,12 +64,14 @@ SCHEMA = [
         exit_time TEXT,
         exit_reason TEXT,
         net_pnl REAL,
-        signal_json TEXT NOT NULL
+        signal_json TEXT NOT NULL,
+        PRIMARY KEY (mode, signal_id)  -- один сигнал может торговаться на demo и live сразу
     )
     """,
     """
     CREATE TABLE IF NOT EXISTS orders (
-        order_link_id TEXT PRIMARY KEY,
+        mode TEXT NOT NULL,
+        order_link_id TEXT NOT NULL,
         signal_id TEXT,
         symbol TEXT NOT NULL,
         side TEXT NOT NULL,
@@ -82,12 +84,14 @@ SCHEMA = [
         avg_price REAL,
         error TEXT,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (mode, order_link_id)
     )
     """,
     """
     CREATE TABLE IF NOT EXISTS events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        mode TEXT NOT NULL DEFAULT '',
         time TEXT NOT NULL,
         level TEXT NOT NULL,          -- info | warning | error
         kind TEXT NOT NULL,

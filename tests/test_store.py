@@ -91,3 +91,21 @@ def test_events_newest_first(store: Store) -> None:
     store.add_event("order", "ордер отклонён", level="error")
     events = store.events()
     assert [e["kind"] for e in events] == ["order", "start"]
+
+
+def test_same_signal_in_two_modes(store: Store) -> None:
+    sig = make_signal()
+    demo = Store(store.conn, mode="demo")
+    store.add_trade(sig, 0.1, 48.9)
+    demo.add_trade(sig, 0.2, 97.8)  # тот же signal_id на другом счёте — не конфликт
+    request = entry_request(sig, 0.1)
+    store.order_sent(request)
+    demo.order_sent(request)
+    demo.order_failed(request.order_link_id, "x")
+    assert store.order_status(request.order_link_id) == "SENT"
+    assert demo.order_status(request.order_link_id) == "REJECTED"
+    t = demo.get_trade(sig.signal_id)
+    assert t is not None and t.qty == 0.2
+    demo.request_kill("демо")
+    assert store.kill_reason() is None
+    assert [o["status"] for o in demo.orders()] == ["REJECTED"]

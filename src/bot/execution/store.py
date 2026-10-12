@@ -94,14 +94,14 @@ class Store:
             return
         sets = ", ".join(f"{k} = ?" for k in fields)
         self.conn.execute(
-            f"UPDATE live_trades SET {sets} WHERE signal_id = ?",  # имена полей — только из allowed
-            (*fields.values(), signal_id),
+            f"UPDATE live_trades SET {sets} WHERE mode = ? AND signal_id = ?",  # поля из allowed
+            (*fields.values(), self.mode, signal_id),
         )
         self.conn.commit()
 
     def get_trade(self, signal_id: str) -> LiveTrade | None:
         row = self.conn.execute(
-            "SELECT * FROM live_trades WHERE signal_id = ?", (signal_id,)
+            "SELECT * FROM live_trades WHERE mode = ? AND signal_id = ?", (self.mode, signal_id)
         ).fetchone()
         return LiveTrade(**dict(row)) if row else None
 
@@ -129,11 +129,12 @@ class Store:
         """Перед сетевым вызовом: NEW → SENT."""
         now = _now()
         self.conn.execute(
-            "INSERT INTO orders (order_link_id, signal_id, symbol, side, order_type, qty, "
-            "reduce_only, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(order_link_id) DO UPDATE SET status = excluded.status, "
+            "INSERT INTO orders (mode, order_link_id, signal_id, symbol, side, order_type, qty, "
+            "reduce_only, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(mode, order_link_id) DO UPDATE SET status = excluded.status, "
             "updated_at = excluded.updated_at",
             (
+                self.mode,
                 request.order_link_id,
                 request.signal_id,
                 request.symbol,
@@ -152,13 +153,14 @@ class Store:
         """После ответа биржи: ACKNOWLEDGED / FILLED / ..."""
         self.conn.execute(
             "UPDATE orders SET status = ?, order_id = ?, filled_qty = ?, avg_price = ?, "
-            "updated_at = ? WHERE order_link_id = ?",
+            "updated_at = ? WHERE mode = ? AND order_link_id = ?",
             (
                 order.status.value,
                 order.order_id,
                 order.filled_qty,
                 order.avg_fill_price,
                 _now(),
+                self.mode,
                 order.order_link_id,
             ),
         )
@@ -166,14 +168,16 @@ class Store:
 
     def order_failed(self, order_link_id: str, error: str) -> None:
         self.conn.execute(
-            "UPDATE orders SET status = ?, error = ?, updated_at = ? WHERE order_link_id = ?",
-            (OrderStatus.REJECTED.value, error[:500], _now(), order_link_id),
+            "UPDATE orders SET status = ?, error = ?, updated_at = ? "
+            "WHERE mode = ? AND order_link_id = ?",
+            (OrderStatus.REJECTED.value, error[:500], _now(), self.mode, order_link_id),
         )
         self.conn.commit()
 
     def order_status(self, order_link_id: str) -> str | None:
         row = self.conn.execute(
-            "SELECT status FROM orders WHERE order_link_id = ?", (order_link_id,)
+            "SELECT status FROM orders WHERE mode = ? AND order_link_id = ?",
+            (self.mode, order_link_id),
         ).fetchone()
         return str(row["status"]) if row else None
 
@@ -181,23 +185,31 @@ class Store:
         """(orderLinkId, символ) ордеров, ушедших на биржу без ответа (SENT):
         их надо найти при reconcile."""
         rows = self.conn.execute(
-            "SELECT order_link_id, symbol FROM orders WHERE status = ?",
-            (OrderStatus.SENT.value,),
+            "SELECT order_link_id, symbol FROM orders WHERE mode = ? AND status = ?",
+            (self.mode, OrderStatus.SENT.value),
         ).fetchall()
         return [(str(r["order_link_id"]), str(r["symbol"])) for r in rows]
+
+    def orders(self, limit: int = 1000) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM orders WHERE mode = ? ORDER BY created_at DESC LIMIT ?",
+            (self.mode, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     # --- события ---------------------------------------------------------------
 
     def add_event(self, kind: str, message: str, level: str = "info") -> None:
         self.conn.execute(
-            "INSERT INTO events (time, level, kind, message) VALUES (?, ?, ?, ?)",
-            (_now(), level, kind, message),
+            "INSERT INTO events (mode, time, level, kind, message) VALUES (?, ?, ?, ?, ?)",
+            (self.mode, _now(), level, kind, message),
         )
         self.conn.commit()
 
     def events(self, limit: int = 100) -> list[dict[str, Any]]:
         rows = self.conn.execute(
-            "SELECT time, level, kind, message FROM events ORDER BY id DESC LIMIT ?", (limit,)
+            "SELECT time, level, kind, message FROM events WHERE mode = ? ORDER BY id DESC LIMIT ?",
+            (self.mode, limit),
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -229,12 +241,12 @@ class Store:
         self.set_value(f"{RISK_STATE_KEY}:{self.mode}", json.dumps(data, ensure_ascii=False))
 
     def request_kill(self, reason: str) -> None:
-        self.set_value(KILL_KEY, reason or "аварийная остановка")
+        self.set_value(f"{KILL_KEY}:{self.mode}", reason or "аварийная остановка")
 
     def kill_reason(self) -> str | None:
-        value = self.get_value(KILL_KEY)
+        value = self.get_value(f"{KILL_KEY}:{self.mode}")
         return value or None
 
     def clear_kill(self) -> None:
-        self.conn.execute("DELETE FROM kv WHERE key = ?", (KILL_KEY,))
+        self.conn.execute("DELETE FROM kv WHERE key = ?", (f"{KILL_KEY}:{self.mode}",))
         self.conn.commit()
