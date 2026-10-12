@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from bot.app.backtests import list_backtests, load_backtest, load_equity, load_r
 from bot.app.jobs import JobRunner, RunFn
 from bot.backtest.report import run_report
 from bot.core.config import load_config
+from bot.core.db import connect, db_path
 from bot.core.timeframes import timeframe_minutes
 from bot.data.resample import resample_candles
 from bot.data.storage import Storage
@@ -92,6 +94,42 @@ def strategy_catalog() -> list[dict[str, Any]]:
     ]
 
 
+def telegram_feed(data_dir: Path, limit: int) -> list[dict[str, Any]]:
+    """Последние посты канала и их разбор ИИ (последний удачный, любой моделью)."""
+    path = db_path(data_dir)
+    if not path.exists():
+        return []
+    conn = connect(path)
+    try:
+        rows = conn.execute(
+            "SELECT p.channel, p.post_id, p.published_at, p.text, "
+            "(SELECT r.result_json FROM post_parses r WHERE r.channel = p.channel "
+            " AND r.post_id = p.post_id AND r.status = 'parsed' "
+            " ORDER BY r.created_at DESC LIMIT 1) AS result_json "
+            "FROM telegram_posts p ORDER BY p.published_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    finally:
+        conn.close()
+    feed = []
+    for row in rows:
+        parsed = json.loads(row["result_json"]) if row["result_json"] else None
+        feed.append(
+            {
+                "channel": row["channel"],
+                "post_id": row["post_id"],
+                "time": int(pd.Timestamp(row["published_at"]).timestamp()),
+                "text": row["text"],
+                "summary": parsed.get("summary_ru") if parsed else None,
+                "views": [
+                    {"symbol": i["symbol"], "bias": i["bias"], "horizon": i["horizon"]}
+                    for i in (parsed or {}).get("instruments", [])
+                ],
+            }
+        )
+    return feed
+
+
 def create_app(
     storage: Storage,
     symbols: list[str],
@@ -147,6 +185,10 @@ def create_app(
         if text is None:
             raise HTTPException(404, f"Нет бэктеста {backtest_id}")
         return {"report": text}
+
+    @app.get("/api/telegram")
+    def get_telegram(limit: int = Query(default=50, ge=1, le=500)) -> dict[str, Any]:
+        return {"posts": telegram_feed(storage.root, limit)}
 
     @app.get("/api/strategies")
     def get_strategies() -> dict[str, Any]:

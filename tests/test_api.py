@@ -218,3 +218,33 @@ def test_backtest_without_trades(tmp_path: Path) -> None:
     (folder / "trades.csv").write_text("\n", encoding="utf-8")
     data = client.get("/api/backtests/20261012-100000_breakout_BTCUSDT_1h").json()
     assert data["trades"] == []
+
+
+def test_telegram_feed(tmp_path: Path) -> None:
+    import json as _json
+    from datetime import UTC, datetime
+
+    from bot.analyzer.llm_parser import ParseOutcome, store_parse
+    from bot.analyzer.telegram_reader import PostRecord, save_posts
+    from bot.core.db import connect
+
+    client = make_client(tmp_path)
+    assert client.get("/api/telegram").json()["posts"] == []
+    conn = connect(tmp_path / "bot.sqlite")
+    t = datetime(2026, 10, 1, 8, 0, tzinfo=UTC)
+    save_posts(conn, [PostRecord("c", 1, t, "BTC вверх"), PostRecord("c", 2, t, "мем")])
+    view = {
+        "symbol": "BTCUSDT",
+        "bias": "BULLISH",
+        "horizon": "SWING",
+        "levels": {"support": [], "resistance": [], "invalidation": None},
+        "conviction": "LOW",
+        "is_trade_call": False,
+    }
+    result = {"instruments": [view], "summary_ru": "рост", "parse_confidence": "HIGH"}
+    store_parse(conn, "c", 1, t.isoformat(), ParseOutcome("parsed", result), "m")
+    posts = {p["post_id"]: p for p in client.get("/api/telegram").json()["posts"]}
+    assert posts[1]["summary"] == "рост"
+    assert posts[1]["views"] == [{"symbol": "BTCUSDT", "bias": "BULLISH", "horizon": "SWING"}]
+    assert posts[2]["summary"] is None
+    assert _json.dumps(posts[1])

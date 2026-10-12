@@ -43,6 +43,11 @@
     .win { color: #1a7f37; } .loss { color: #cf222e; }
     #report { white-space: pre-wrap; font: 13px ui-monospace, monospace; margin: 0; }
     .hint { color: var(--muted); }
+    .post { border-bottom: 1px solid var(--border); padding: 6px 0; }
+    .post .meta { color: var(--muted); font-size: 12px; }
+    .post .text { white-space: pre-wrap; margin: 4px 0; }
+    .bias { font-weight: 600; margin-right: 8px; }
+    .bias.BULLISH { color: #1a7f37; } .bias.BEARISH { color: #cf222e; }
     .row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 6px 0; }
     .row input { font: inherit; width: 9em; }
     .row input[type=date] { width: auto; }
@@ -75,10 +80,12 @@
       <button data-tab="equity">Капитал</button>
       <button data-tab="report">Отчёт</button>
       <button data-tab="run">Запуск</button>
+      <button data-tab="telegram">Telegram</button>
     </div>
     <div id="tab-trades" class="tab active"><p class="hint">Выберите бэктест.</p></div>
     <div id="tab-equity" class="tab"><div id="equity"></div></div>
     <div id="tab-report" class="tab"><pre id="report" class="hint">Выберите бэктест.</pre></div>
+    <div id="tab-telegram" class="tab"><p class="hint">Загрузка…</p></div>
     <div id="tab-run" class="tab">
       <form id="runform">
         <div class="row">
@@ -211,6 +218,7 @@
       document.querySelectorAll(".tab").forEach((t) =>
         t.classList.toggle("active", t.id === "tab-" + b.dataset.tab));
       if (b.dataset.tab === "equity") requestAnimationFrame(() => equityChart.timeScale().fitContent());
+      if (b.dataset.tab === "telegram") loadTelegram();
     });
 
     const equityChart = LightweightCharts.createChart(document.getElementById("equity"), {
@@ -310,6 +318,28 @@
       loadExtras(backtest.id);
       if (backtest.trades.length) showTrade();
       else { info.textContent = "в бэктесте нет сделок"; load(); }
+    }
+
+    // Лента Telegram с разбором ИИ (только справочно, на сделки не влияет)
+    const escapeHtml = (t) => t.replace(/[&<>"]/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+    async function loadTelegram() {
+      const box = document.getElementById("tab-telegram");
+      const posts = (await (await fetch("/api/telegram")).json()).posts;
+      if (!posts.length) {
+        box.innerHTML = `<p class="hint">Постов нет. Выгрузите канал: ` +
+          `<code>uv run python -m bot.analyzer.telegram_reader --channel …</code></p>`;
+        return;
+      }
+      box.innerHTML = posts.map((p) => {
+        const views = p.views.map((v) =>
+          `<span class="bias ${v.bias}">${v.symbol} ${v.bias} (${v.horizon})</span>`).join("");
+        const summary = p.summary === null ? `<span class="hint">не разобран</span>`
+          : `${views}${escapeHtml(p.summary)}`;
+        return `<div class="post"><div class="meta">${when(p.time)} · ${escapeHtml(p.channel)}` +
+          ` #${p.post_id}</div><div class="text">${escapeHtml(p.text)}</div>` +
+          `<div>ИИ: ${summary}</div></div>`;
+      }).join("");
     }
 
     // Запуск бэктеста из интерфейса
