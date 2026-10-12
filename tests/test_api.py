@@ -288,3 +288,75 @@ def test_bot_tab_status_and_commands(tmp_path: Path) -> None:
     assert client.get("/api/bot").json()["kill_file"] is True
     client.post("/api/bot/resume")
     assert (tmp_path / "RESUME").exists()
+
+
+def test_chart_keeps_forming_bar() -> None:
+    from bot.app.api import chart_bars
+
+    times = pd.date_range("2024-03-01", periods=150, freq="1min", tz="UTC")
+    prices = pd.Series(range(150), dtype="float64")
+    df = pd.DataFrame(
+        {
+            "open_time": times,
+            "open": prices,
+            "high": prices + 1,
+            "low": prices - 1,
+            "close": prices,
+            "volume": 1.0,
+            "turnover": prices,
+        }
+    )
+    bars = chart_bars(df, "1h")
+    # 00:00 и 01:00 — закрытые часы; 02:00 — текущий час из 30 минут (минуты 120–149)
+    assert len(bars) == 3
+    last = bars.iloc[-1]
+    assert last["open_time"] == pd.Timestamp("2024-03-01 02:00", tz="UTC")
+    assert (last["open"], last["high"], last["low"], last["close"]) == (120, 150, 119, 149)
+    assert last["volume"] == 30
+
+
+def test_candles_refresh_is_requested(tmp_path: Path) -> None:
+    from bot.app.refresh import CandleRefresher
+
+    storage = Storage(tmp_path)
+    make_client(tmp_path)  # пишет 3 суток свечей 2024-03-01…03
+    calls: list[tuple[str, pd.Timestamp]] = []
+
+    def download(symbol: str, start: pd.Timestamp) -> int:
+        calls.append((symbol, start))
+        return 0
+
+    refresher = CandleRefresher(
+        download,
+        lambda s: storage.last_candle_time(s, "1m"),
+        now=lambda: pd.Timestamp("2024-03-10", tz="UTC"),
+        background=False,
+    )
+    client = TestClient(create_app(storage, ["BTCUSDT"], refresher=refresher))
+    data = client.get("/api/candles", params={"symbol": "BTCUSDT"}).json()
+    assert calls == [("BTCUSDT", pd.Timestamp("2024-03-04", tz="UTC"))]  # со следующей минуты
+    assert data["last_minute"] == int(pd.Timestamp("2024-03-03 23:59", tz="UTC").timestamp())
+    client.get("/api/candles", params={"symbol": "BTCUSDT"})
+    assert len(calls) == 1  # повтор не раньше чем через 30 с
+    until = int(pd.Timestamp("2024-03-02", tz="UTC").timestamp())
+    client.get("/api/candles", params={"symbol": "BTCUSDT", "until": until})
+    assert len(calls) == 1  # просмотр старой сделки ничего не догружает
+
+
+def test_refresh_error_and_fresh_data() -> None:
+    from bot.app.refresh import CandleRefresher
+
+    now = {"t": pd.Timestamp("2024-03-10 12:00:30", tz="UTC")}
+
+    def broken(symbol: str, start: pd.Timestamp) -> int:
+        raise ConnectionError("нет сети")
+
+    fresh = CandleRefresher(
+        broken, lambda s: pd.Timestamp("2024-03-10 11:59", tz="UTC"), lambda: now["t"], False
+    )
+    assert not fresh.stale("BTCUSDT")  # последняя минута закрылась 30 с назад
+    stale = CandleRefresher(
+        broken, lambda s: pd.Timestamp("2024-03-10 11:00", tz="UTC"), lambda: now["t"], False
+    )
+    state = stale.request("BTCUSDT")
+    assert state.error is not None and "ConnectionError" in state.error and not state.running
