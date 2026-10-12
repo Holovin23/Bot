@@ -1,0 +1,29 @@
+# Общие настройки бота. Секреты здесь НЕ хранятся — только в .env.
+
+data:
+  dir: data
+  symbols: [BTCUSDT, ETHUSDT]
+  category: linear
+  history_start: "2021-01-01"
+  base_interval: 1m
+  timeframes: [5m, 15m, 1h, 4h]
+  open_interest_interval: 5min
+
+logging:
+  dir: logs
+  level: INFO
+  retention_days: 30
+
+app:
+  host: 127.0.0.1
+  port: 8000
+
+# Издержки для бэктеста (сверить с таблицей Bybit в начале этапа 2)
+costs:
+  taker_fee: 0.00055
+  maker_fee: 0.0002
+  slippage:
+    BTCUSDT: 0.0003
+    ETHUSDT: 0.0005
+  stop_slippage_multiplier: 2.0
+  initial_capital: 10000
