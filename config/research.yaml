@@ -1,0 +1,20 @@
+# Конвейер исследований (этап 9): что перебирать. Каждый вариант сетки — «попытка»,
+# все попытки учитываются в Deflated Sharpe Ratio (research/trials.json).
+# Не добавляйте варианты «на всякий случай»: чем их больше, тем выше планка.
+
+symbols: [BTCUSDT, ETHUSDT]
+timeframes: [1h]
+min_dsr: 0.95
+
+strategies:
+  mean_reversion:
+    grid:
+      adx_max: [15, 20, 25]
+      bb_std: [2.0, 2.5]
+  trend_following:
+    grid:
+      stop_atr: [1.5, 2.0, 3.0]
+      trail_atr: [2.0, 3.0]
+  breakout:
+    grid:
+      volume_mult: [1.2, 1.5, 2.0]
