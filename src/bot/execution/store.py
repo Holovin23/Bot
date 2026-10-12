@@ -177,12 +177,14 @@ class Store:
         ).fetchone()
         return str(row["status"]) if row else None
 
-    def unconfirmed_orders(self) -> list[str]:
-        """Ордера, ушедшие на биржу без ответа (SENT): их надо найти при reconcile."""
+    def unconfirmed_orders(self) -> list[tuple[str, str]]:
+        """(orderLinkId, символ) ордеров, ушедших на биржу без ответа (SENT):
+        их надо найти при reconcile."""
         rows = self.conn.execute(
-            "SELECT order_link_id FROM orders WHERE status = ?", (OrderStatus.SENT.value,)
+            "SELECT order_link_id, symbol FROM orders WHERE status = ?",
+            (OrderStatus.SENT.value,),
         ).fetchall()
-        return [str(r["order_link_id"]) for r in rows]
+        return [(str(r["order_link_id"]), str(r["symbol"])) for r in rows]
 
     # --- события ---------------------------------------------------------------
 

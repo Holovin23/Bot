@@ -53,7 +53,7 @@ def test_order_state_machine(store: Store) -> None:
     request = entry_request(make_signal(), 0.1)
     store.order_sent(request)
     assert store.order_status(request.order_link_id) == "SENT"
-    assert store.unconfirmed_orders() == [request.order_link_id]
+    assert store.unconfirmed_orders() == [(request.order_link_id, "BTCUSDT")]
     store.order_result(
         Order(
             order_link_id=request.order_link_id,
