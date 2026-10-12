@@ -84,6 +84,7 @@ def run_grid(
             risk=cfg.risk,
             initial_capital=cfg.costs.initial_capital,
             funding=funding,
+            limits=cfg.limits,
         )
         m = compute_metrics(result, candles_1m["close"])
         rows.append({**variant, **{c: getattr(m, c) for c in METRIC_COLUMNS}})

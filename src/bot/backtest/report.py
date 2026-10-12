@@ -252,6 +252,7 @@ def run_report(
         risk=cfg.risk,
         initial_capital=cfg.costs.initial_capital,
         funding=funding,
+        limits=cfg.limits,
     )
     metrics = compute_metrics(result, candles["close"])
     ctx = ReportContext(start=start, end=end, costs=costs, risk=cfg.risk)

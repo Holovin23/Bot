@@ -149,6 +149,7 @@ def main(argv: list[str] | None = None) -> None:
         risk=cfg.risk,
         initial_capital=cfg.costs.initial_capital,
         funding=funding,
+        limits=cfg.limits,
     )
     data = build_dataset(result, candles)
     if len(data) < 50:

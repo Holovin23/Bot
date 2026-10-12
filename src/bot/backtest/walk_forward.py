@@ -98,6 +98,7 @@ def strategy_window(
         risk=cfg.risk,
         initial_capital=cfg.costs.initial_capital,
         funding=fund,
+        limits=cfg.limits,
     )
     return [t for t in result.trades if start <= t.signal_time < end]
 

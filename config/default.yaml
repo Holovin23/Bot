@@ -37,3 +37,22 @@ instruments:
 risk:
   risk_per_trade: 0.005
   max_leverage: 3.0
+
+# Проверки перед каждой сделкой (docs/05-risk-and-execution.md). Ослаблять только решением
+# владельца: код не примет значения мягче, чем в 05.
+limits:
+  max_positions: 2
+  max_positions_per_symbol: 1
+  max_total_risk: 0.015
+  correlated_groups: [[BTCUSDT, ETHUSDT]]
+  correlated_weight: 1.5
+  daily_loss: 0.02
+  max_drawdown: 0.10
+  max_loss_streak: 6
+  min_stop_atr: 0.5
+  max_stop_atr: 4.0
+  liq_buffer: 2.0
+  max_cost_share: 0.2
+  stale_bars: 2
+  default_min_rr: 1.5
+  min_rr: {mean_reversion: 1.0, random_entry: 1.0}

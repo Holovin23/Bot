@@ -132,6 +132,7 @@ def run_experiment(
         "costs": costs,
         "risk": cfg.risk,
         "funding": funding,
+        "limits": cfg.limits,
     }
     result = run_backtest(
         strategy, symbol, candles_1m, initial_capital=cfg.costs.initial_capital, **common
