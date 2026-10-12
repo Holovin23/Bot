@@ -50,3 +50,14 @@ def test_secrets_are_hidden_when_printed(tmp_path: Path) -> None:
     cfg = load_config(env_file=env)
     assert "supersecret" not in repr(cfg)
     assert "supersecret" not in str(cfg.secrets)
+
+
+def test_env_example_parses_with_empty_values() -> None:
+    from pathlib import Path
+
+    from bot.core.config import PROJECT_ROOT, load_config
+
+    cfg = load_config(env_file=Path(PROJECT_ROOT / ".env.example"))
+    assert cfg.secrets.is_demo
+    assert cfg.secrets.tg_api_id is None
+    assert cfg.secrets.tg_chat_id == ""

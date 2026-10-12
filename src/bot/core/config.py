@@ -58,13 +58,20 @@ class Secrets(BaseSettings):
     """Значения из .env и переменных окружения. Ключи хранятся как SecretStr:
     при печати видно '**********', а не сам ключ."""
 
-    model_config = SettingsConfigDict(extra="ignore", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        extra="ignore", env_file_encoding="utf-8", env_ignore_empty=True
+    )
 
     bybit_api_key: SecretStr = SecretStr("")
     bybit_api_secret: SecretStr = SecretStr("")
     bybit_env: Literal["demo", "live"] = "demo"
     allow_live: bool = False
     anthropic_api_key: SecretStr = SecretStr("")
+    # Telegram: чтение канала (my.telegram.org) и бот для уведомлений (@BotFather)
+    tg_api_id: int | None = None
+    tg_api_hash: SecretStr = SecretStr("")
+    tg_bot_token: SecretStr = SecretStr("")
+    tg_chat_id: str = ""
 
     @model_validator(mode="after")
     def _live_requires_flag(self) -> Secrets:
