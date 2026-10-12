@@ -21,6 +21,28 @@
       margin-right: 4px; vertical-align: middle; background: var(--c); }
     #status { color: var(--muted); margin-left: auto; }
     #chart { flex: 1; min-height: 300px; }
+    #panel { height: 34vh; min-height: 180px; display: flex; flex-direction: column;
+      border-top: 1px solid var(--border); }
+    .tabs { display: flex; gap: 4px; padding: 4px 16px 0; }
+    .tabs button { font: inherit; background: none; color: var(--muted); border: 1px solid
+      transparent; border-bottom: none; padding: 4px 10px; cursor: pointer; }
+    .tabs button.active { color: var(--fg); border-color: var(--border);
+      border-radius: 6px 6px 0 0; }
+    .tab { flex: 1; overflow: auto; padding: 4px 16px; display: none; }
+    .tab.active { display: block; }
+    #tab-equity.active { display: flex; }
+    #equity { flex: 1; }
+    table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+    th, td { text-align: right; padding: 2px 8px; border-bottom: 1px solid var(--border);
+      white-space: nowrap; }
+    th { position: sticky; top: 0; background: var(--bg); color: var(--muted); }
+    th:nth-child(2), td:nth-child(2), th:nth-child(7), td:nth-child(7) { text-align: left; }
+    tbody tr { cursor: pointer; }
+    tbody tr:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+    tbody tr.selected { background: color-mix(in srgb, #4a90e2 18%, transparent); }
+    .win { color: #1a7f37; } .loss { color: #cf222e; }
+    #report { white-space: pre-wrap; font: 13px ui-monospace, monospace; margin: 0; }
+    .hint { color: var(--muted); }
     #tradeinfo { padding: 4px 16px; color: var(--muted); min-height: 1.4em; }
     #tradeinfo b { color: var(--fg); font-weight: 600; }
     footer { padding: 4px 16px; color: var(--muted); font-size: 12px;
@@ -44,6 +66,16 @@
   </header>
   <div id="tradeinfo"></div>
   <div id="chart"></div>
+  <div id="panel">
+    <div class="tabs">
+      <button data-tab="trades" class="active">Сделки</button>
+      <button data-tab="equity">Капитал</button>
+      <button data-tab="report">Отчёт</button>
+    </div>
+    <div id="tab-trades" class="tab active"><p class="hint">Выберите бэктест.</p></div>
+    <div id="tab-equity" class="tab"><div id="equity"></div></div>
+    <div id="tab-report" class="tab"><pre id="report" class="hint">Выберите бэктест.</pre></div>
+  </div>
   <footer>
     Время — локальное. Графики:
     <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a>
@@ -152,12 +184,72 @@
       add(t.take, "#1a7f37", "тейк");
     }
 
+    // Вкладки под графиком
+    const tabs = document.querySelectorAll(".tabs button");
+    tabs.forEach((b) => b.onclick = () => {
+      tabs.forEach((x) => x.classList.toggle("active", x === b));
+      document.querySelectorAll(".tab").forEach((t) =>
+        t.classList.toggle("active", t.id === "tab-" + b.dataset.tab));
+      if (b.dataset.tab === "equity") requestAnimationFrame(() => equityChart.timeScale().fitContent());
+    });
+
+    const equityChart = LightweightCharts.createChart(document.getElementById("equity"), {
+      autoSize: true,
+      layout: { background: { color: dark ? "#0d1117" : "#ffffff" },
+                textColor: dark ? "#e6edf3" : "#1f2328", attributionLogo: true },
+      grid: { vertLines: { visible: false }, horzLines: { color: dark ? "#21262d" : "#eef1f4" } },
+      timeScale: { timeVisible: true, secondsVisible: false },
+    });
+    const equityLine = equityChart.addLineSeries({ color: "#4a90e2", lineWidth: 2 });
+
+    function renderTable() {
+      const box = document.getElementById("tab-trades");
+      if (!backtest || !backtest.trades.length) {
+        box.innerHTML = `<p class="hint">${backtest ? "В бэктесте нет сделок." : "Выберите бэктест."}</p>`;
+        return;
+      }
+      const rows = backtest.trades.map((t) => {
+        const cls = t.r_multiple >= 0 ? "win" : "loss";
+        return `<tr data-n="${t.number}"><td>${t.number}</td><td>${t.side}</td>` +
+          `<td>${when(t.entry_time)}</td><td>${fmt(t.entry_price)}</td>` +
+          `<td>${t.exit_time === null ? "—" : when(t.exit_time)}</td><td>${fmt(t.exit_price)}</td>` +
+          `<td>${t.exit_reason}</td><td class="${cls}">${t.r_multiple.toFixed(2)}</td>` +
+          `<td class="${cls}">${fmt(t.net_pnl)}</td></tr>`;
+      }).join("");
+      box.innerHTML = `<table><thead><tr><th>#</th><th>Сторона</th><th>Вход</th><th>Цена</th>` +
+        `<th>Выход</th><th>Цена</th><th>Причина</th><th>R</th><th>USDT</th></tr></thead>` +
+        `<tbody>${rows}</tbody></table>`;
+      box.querySelectorAll("tbody tr").forEach((tr) => tr.onclick = () => {
+        tradeSel.value = tr.dataset.n;
+        showTrade();
+      });
+      markRow();
+    }
+
+    function markRow() {
+      document.querySelectorAll("#tab-trades tbody tr").forEach((tr) =>
+        tr.classList.toggle("selected", tr.dataset.n === tradeSel.value));
+    }
+
+    async function loadExtras(id) {
+      const [eq, rep] = await Promise.all([
+        fetch(`/api/backtests/${encodeURIComponent(id)}/equity`).then((r) => r.json()),
+        fetch(`/api/backtests/${encodeURIComponent(id)}/report`).then((r) => r.json()),
+      ]);
+      equityLine.setData(eq.equity.map((p) => ({ time: local(p.time), value: p.value })));
+      equityChart.timeScale().fitContent();
+      const report = document.getElementById("report");
+      report.textContent = rep.report || "Отчёта нет.";
+      report.classList.toggle("hint", !rep.report);
+    }
+
     function selectedTrade() {
       if (!backtest) return null;
       return backtest.trades.find((t) => String(t.number) === tradeSel.value) || null;
     }
 
     function showTrade() {
+      markRow();
       const t = selectedTrade();
       if (!t) { info.textContent = ""; load(); return; }
       info.innerHTML = `<b>#${t.number} ${t.side}</b> вход ${when(t.entry_time)} по ` +
@@ -177,7 +269,13 @@
       tradeSel.innerHTML = "";
       tradeSel.disabled = true;
       info.textContent = "";
-      if (!backtestSel.value) { load(); return; }
+      if (!backtestSel.value) {
+        renderTable();
+        equityLine.setData([]);
+        document.getElementById("report").textContent = "Выберите бэктест.";
+        load();
+        return;
+      }
       const response = await fetch("/api/backtests/" + encodeURIComponent(backtestSel.value));
       if (!response.ok) { status.textContent = "ошибка " + response.status; return; }
       backtest = await response.json();
@@ -188,6 +286,8 @@
           .toLocaleDateString()} ${t.side} ${t.exit_reason} ${t.r_multiple.toFixed(2)}R</option>`
       ).join("");
       tradeSel.disabled = backtest.trades.length === 0;
+      renderTable();
+      loadExtras(backtest.id);
       if (backtest.trades.length) showTrade();
       else { info.textContent = "в бэктесте нет сделок"; load(); }
     }

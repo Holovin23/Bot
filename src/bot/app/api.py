@@ -17,7 +17,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from bot.app.backtests import list_backtests, load_backtest
+from bot.app.backtests import list_backtests, load_backtest, load_equity, load_report
 from bot.core.config import load_config
 from bot.core.timeframes import timeframe_minutes
 from bot.data.resample import resample_candles
@@ -104,6 +104,20 @@ def create_app(storage: Storage, symbols: list[str], backtests_dir: Path | None 
         if data is None:
             raise HTTPException(404, f"Нет бэктеста {backtest_id}")
         return data
+
+    @app.get("/api/backtests/{backtest_id}/equity")
+    def get_equity(backtest_id: str) -> dict[str, Any]:
+        points = load_equity(backtests_root, backtest_id)
+        if points is None:
+            raise HTTPException(404, f"Нет бэктеста {backtest_id}")
+        return {"equity": points}
+
+    @app.get("/api/backtests/{backtest_id}/report")
+    def get_report(backtest_id: str) -> dict[str, str]:
+        text = load_report(backtests_root, backtest_id)
+        if text is None:
+            raise HTTPException(404, f"Нет бэктеста {backtest_id}")
+        return {"report": text}
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app

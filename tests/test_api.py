@@ -115,3 +115,37 @@ def test_candles_until(tmp_path: Path) -> None:
     assert len(candles) == 10
     # Свеча 05:00 содержит момент until — она последняя
     assert candles[-1]["time"] == int(pd.Timestamp("2024-03-02 05:00", tz="UTC").timestamp())
+
+
+def test_thin_equity_keeps_extremes() -> None:
+    from bot.app.backtests import thin_equity
+
+    times = list(range(10))
+    values = [5.0, 4.0, 9.0, 6.0, 1.0, 7.0, 8.0, 2.0, 3.0, 6.5]
+    assert len(thin_equity(times, values, 20)) == 10
+    # 2 отрезка по 5 точек: в первом мин 1 (t=4) и макс 9 (t=2), во втором мин 2 (t=7)
+    # и макс 8 (t=6), плюс первая и последняя точки
+    thinned = thin_equity(times, values, 4)
+    assert [p["time"] for p in thinned] == [0, 2, 4, 6, 7, 9]
+
+
+def test_equity_and_report(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    name = "20261012-100000_mean_reversion_BTCUSDT_1h"
+    write_backtest(tmp_path / "backtests", name)
+    folder = tmp_path / "backtests" / name
+    pd.DataFrame(
+        {
+            "time": ["2024-03-01 01:00:00+00:00", "2024-03-01 02:00:00+00:00"],
+            "equity": [10000.0, 9950.123],
+            "in_position": [False, True],
+        }
+    ).to_csv(folder / "equity.csv", index=False)
+    (folder / "report.md").write_text("# Бэктест", encoding="utf-8")
+    equity = client.get(f"/api/backtests/{name}/equity").json()["equity"]
+    assert equity[1] == {
+        "time": int(pd.Timestamp("2024-03-01 02:00", tz="UTC").timestamp()),
+        "value": 9950.12,
+    }
+    assert client.get(f"/api/backtests/{name}/report").json()["report"] == "# Бэктест"
+    assert client.get("/api/backtests/20261012-000000_x_BTCUSDT_1h/equity").status_code == 404
