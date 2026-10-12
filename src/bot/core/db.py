@@ -42,6 +42,64 @@ SCHEMA = [
         PRIMARY KEY (channel, post_id, symbol)
     )
     """,
+    # Этап 7: живой бот (paper / demo)
+    """
+    CREATE TABLE IF NOT EXISTS live_trades (
+        signal_id TEXT PRIMARY KEY,
+        mode TEXT NOT NULL,           -- paper | demo | live
+        strategy TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        timeframe TEXT NOT NULL,
+        side TEXT NOT NULL,
+        qty REAL NOT NULL,
+        entry_price REAL,
+        stop REAL NOT NULL,
+        take REAL,
+        time_stop_bars INTEGER,
+        bars_held INTEGER NOT NULL DEFAULT 0,
+        risk_amount REAL NOT NULL,
+        status TEXT NOT NULL,         -- pending | open | closed | failed
+        opened_at TEXT,
+        exit_price REAL,
+        exit_time TEXT,
+        exit_reason TEXT,
+        net_pnl REAL,
+        signal_json TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS orders (
+        order_link_id TEXT PRIMARY KEY,
+        signal_id TEXT,
+        symbol TEXT NOT NULL,
+        side TEXT NOT NULL,
+        order_type TEXT NOT NULL,
+        qty REAL NOT NULL,
+        reduce_only INTEGER NOT NULL,
+        status TEXT NOT NULL,         -- машина состояний из docs/05
+        order_id TEXT,
+        filled_qty REAL NOT NULL DEFAULT 0,
+        avg_price REAL,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        time TEXT NOT NULL,
+        level TEXT NOT NULL,          -- info | warning | error
+        kind TEXT NOT NULL,
+        message TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS kv (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    )
+    """,
 ]
 
 
