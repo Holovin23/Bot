@@ -7,41 +7,88 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 import pandas as pd
+from numpy.typing import NDArray
 
 from bot.core.models import EntryType, Position, Side, Signal
 
 
-@dataclass(frozen=True)
 class MarketContext:
     """Всё, что стратегия знает на закрытии текущей свечи.
 
     bars и features содержат строки только до текущей свечи включительно,
-    последняя строка — текущая (только что закрытая) свеча.
+    последняя строка — текущая (только что закрытая) свеча. bar и feature —
+    значения текущей свечи (словарь «колонка -> число»), value() — значение
+    колонки на lag свечей назад. Будущие строки недоступны.
     """
 
-    symbol: str
-    timeframe: str
-    bars: pd.DataFrame
-    features: pd.DataFrame
+    def __init__(
+        self,
+        symbol: str,
+        timeframe: str,
+        all_bars: pd.DataFrame,
+        all_features: pd.DataFrame,
+        index: int,
+        columns: dict[str, NDArray[Any]] | None = None,
+    ) -> None:
+        self.symbol = symbol
+        self.timeframe = timeframe
+        self.index = index
+        self._all_bars = all_bars
+        self._all_features = all_features
+        self._columns = columns if columns is not None else _numpy_columns(all_bars, all_features)
+        self._bars: pd.DataFrame | None = None
+        self._features: pd.DataFrame | None = None
 
     @property
-    def bar(self) -> pd.Series:
-        return self.bars.iloc[-1]
+    def bars(self) -> pd.DataFrame:
+        if self._bars is None:
+            self._bars = self._all_bars.iloc[: self.index + 1]
+        return self._bars
 
     @property
-    def feature(self) -> pd.Series:
-        return self.features.iloc[-1]
+    def features(self) -> pd.DataFrame:
+        if self._features is None:
+            self._features = self._all_features.iloc[: self.index + 1]
+        return self._features
+
+    def value(self, column: str, lag: int = 0) -> float:
+        """Значение колонки свечи или признака: lag=0 — текущая, 1 — предыдущая."""
+        if lag < 0:
+            raise ValueError("Будущие свечи недоступны")
+        if lag > self.index:
+            return float("nan")
+        return float(self._columns[column][self.index - lag])
+
+    @property
+    def bar(self) -> dict[str, float]:
+        return {c: self.value(c) for c in _OHLCV if c in self._columns}
+
+    @property
+    def feature(self) -> dict[str, float]:
+        return {c: self.value(c) for c in self._all_features.columns}
 
     @property
     def time(self) -> datetime:
         """Время открытия текущей свечи (UTC)."""
-        ts: pd.Timestamp = self.bars["open_time"].iloc[-1]
-        return ts.to_pydatetime()
+        ns = int(self._columns["open_time"][self.index])
+        return datetime.fromtimestamp(ns / 1e9, tz=UTC)
+
+
+_OHLCV = ("open", "high", "low", "close", "volume", "turnover")
+
+
+def _numpy_columns(bars: pd.DataFrame, features: pd.DataFrame) -> dict[str, NDArray[Any]]:
+    columns: dict[str, NDArray[Any]] = {
+        c: bars[c].to_numpy(dtype="float64") for c in _OHLCV if c in bars
+    }
+    columns["open_time"] = bars["open_time"].to_numpy(dtype="datetime64[ns]").astype("int64")
+    for c in features.columns:
+        columns[str(c)] = features[c].to_numpy(dtype="float64")
+    return columns
 
 
 class Strategy(Protocol):
@@ -107,7 +154,7 @@ class BaseStrategy:
             timeframe=self.timeframe,
             bar_time=ctx.time,
             side=side,
-            entry_price=float(ctx.bar["close"]),
+            entry_price=ctx.value("close"),
             stop_loss=stop_loss,
             take_profit=take_profit,
             entry_type=EntryType.MARKET,
@@ -125,17 +172,10 @@ def iter_contexts(
     features = strategy.prepare(bars).reset_index(drop=True)
     if len(features) != len(bars):
         raise ValueError("prepare() должен вернуть по строке на каждую свечу")
+    columns = _numpy_columns(bars, features)
     start = max(strategy.required_history() - 1, 0)
     for i in range(start, len(bars)):
-        yield (
-            i,
-            MarketContext(
-                symbol=symbol,
-                timeframe=strategy.timeframe,
-                bars=bars.iloc[: i + 1],
-                features=features.iloc[: i + 1],
-            ),
-        )
+        yield i, MarketContext(symbol, strategy.timeframe, bars, features, i, columns)
 
 
 def generate_signals(strategy: Strategy, symbol: str, bars: pd.DataFrame) -> list[Signal]:

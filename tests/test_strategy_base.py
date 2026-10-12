@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from bot.backtest.lookahead import find_lookahead
 from bot.core.models import Side, Signal
@@ -53,8 +54,12 @@ def test_context_sees_only_closed_bars() -> None:
     assert contexts[0][0] == 4  # первые 4 свечи — разгон
     i, ctx = contexts[3]
     assert len(ctx.bars) == i + 1
-    assert ctx.bar["open_time"] == bars["open_time"].iloc[i]
+    assert ctx.bar["close"] == bars["close"].iloc[i]
     assert ctx.time == bars["open_time"].iloc[i].to_pydatetime()
+    assert ctx.value("close", lag=1) == bars["close"].iloc[i - 1]
+    assert ctx.feature["sma"] == ctx.features["sma"].iloc[-1]
+    with pytest.raises(ValueError):
+        ctx.value("close", lag=-1)  # будущее недоступно
 
 
 def test_signal_has_entry_at_close_and_id() -> None:

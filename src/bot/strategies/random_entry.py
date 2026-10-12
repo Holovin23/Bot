@@ -8,9 +8,9 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from bot.core.models import Side, Signal
@@ -41,13 +41,15 @@ class RandomEntry(BaseStrategy):
         return pd.DataFrame({"atr": atr(bars, int(self.params["atr_length"]))})
 
     def _draw(self, ctx: MarketContext) -> tuple[float, float]:
-        ms = int(pd.Timestamp(ctx.time).value // 1_000_000)
-        rng = np.random.default_rng([int(self.params["seed"]), ms])
-        enter, direction = rng.random(2)
-        return float(enter), float(direction)
+        """Два «случайных» числа в [0, 1), зависящих только от seed и времени свечи."""
+        key = f"{self.params['seed']}:{ctx.time.isoformat()}".encode()
+        digest = hashlib.blake2b(key, digest_size=16).digest()
+        enter = int.from_bytes(digest[:8], "big") / 2**64
+        direction = int.from_bytes(digest[8:], "big") / 2**64
+        return enter, direction
 
     def on_bar(self, ctx: MarketContext) -> list[Signal]:
-        value = float(ctx.feature["atr"])
+        value = ctx.value("atr")
         if not value > 0:
             return []
         enter, direction = self._draw(ctx)
@@ -55,7 +57,7 @@ class RandomEntry(BaseStrategy):
             return []
         side = Side.LONG if direction < 0.5 else Side.SHORT
         sign = 1.0 if side is Side.LONG else -1.0
-        close = float(ctx.bar["close"])
+        close = ctx.value("close")
         stop = close - sign * float(self.params["stop_atr"]) * value
         tp_atr = self.params["tp_atr"]
         take = None if tp_atr is None else close + sign * float(tp_atr) * value

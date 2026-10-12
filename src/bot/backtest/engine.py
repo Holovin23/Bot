@@ -123,10 +123,6 @@ class _Market:
             self.f_times = f["time"].to_numpy(dtype="datetime64[ns]")
             self.f_rates = f["funding_rate"].to_numpy(dtype="float64")
 
-    def index_at(self, ts: pd.Timestamp) -> int:
-        """Первая 1m-свеча с open_time >= ts."""
-        return int(np.searchsorted(self.times, np.datetime64(ts.tz_convert(None), "ns")))
-
     def time(self, k: int) -> pd.Timestamp:
         return pd.Timestamp(self.times[k]).tz_localize("UTC")
 
@@ -228,11 +224,13 @@ def run_backtest(
         while f_ptr < len(market.f_times) and market.f_times[f_ptr] <= market.times[k]:
             f_ptr += 1
 
+    bar_opens = bars["open_time"].to_numpy(dtype="datetime64[ns]")
+    starts = np.searchsorted(market.times, bar_opens)
+    ends = np.searchsorted(market.times, bar_opens + np.timedelta64(step))
+
     for i, ctx in iter_contexts(strategy, symbol, bars):
-        bar_open = pd.Timestamp(bars["open_time"].iloc[i])
-        bar_close = bar_open + step
-        k_start = market.index_at(bar_open)
-        k_end = market.index_at(bar_close)
+        bar_close = pd.Timestamp(bar_opens[i]).tz_localize("UTC") + step
+        k_start, k_end = int(starts[i]), int(ends[i])
 
         # 1. Открытие свечи: отложенный выход или вход.
         if k_start < k_end:
@@ -266,7 +264,7 @@ def run_backtest(
                     break
 
         # 3. Закрытие свечи.
-        close_price = float(ctx.bar["close"])
+        close_price = ctx.value("close")
         if position is not None:
             position.bars_held += 1
             time_stop = position.time_stop_bars
