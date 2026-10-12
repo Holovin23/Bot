@@ -55,4 +55,4 @@
 
 ## Как проверить на своём компьютере
 
-См. раздел «Живая торговля» в [USER_GUIDE.md](../USER_GUIDE.md). Кратко: `uv run python -m bot.runner.live --mode paper`, затем `--mode demo`; ≥ 4 недель и ≥ 30 сделок; ручные тесты сбоев из 05.
+См. раздел 8 «Живая торговля» в [USER_GUIDE.md](../USER_GUIDE.md). Кратко: `uv run python -m bot.runner.live --mode paper`, затем `--mode demo`; ≥ 4 недель и ≥ 30 сделок; ручные тесты сбоев из 05.
