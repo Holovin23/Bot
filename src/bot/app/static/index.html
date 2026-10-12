@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bot — график</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root { --bg: #ffffff; --fg: #1f2328; --muted: #6e7781; --border: #d0d7de; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --border: #30363d; }
+    }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+      font: 14px system-ui, sans-serif; }
+    body { display: flex; flex-direction: column; }
+    header { display: flex; gap: 12px; align-items: center; padding: 8px 16px;
+      border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+    select { font: inherit; padding: 2px 6px; }
+    .legend { display: flex; gap: 12px; color: var(--muted); }
+    .legend span::before { content: ""; display: inline-block; width: 12px; height: 3px;
+      margin-right: 4px; vertical-align: middle; background: var(--c); }
+    #status { color: var(--muted); margin-left: auto; }
+    #chart { flex: 1; min-height: 300px; }
+    footer { padding: 4px 16px; color: var(--muted); font-size: 12px;
+      border-top: 1px solid var(--border); }
+    footer a { color: inherit; }
+  </style>
+</head>
+<body>
+  <header>
+    <label>Символ <select id="symbol"></select></label>
+    <label>Таймфрейм <select id="timeframe"></select></label>
+    <div class="legend">
+      <span style="--c:#f5a623">EMA20</span>
+      <span style="--c:#4a90e2">EMA50</span>
+      <span style="--c:#bd10e0">EMA200</span>
+      <span style="--c:#8b949e">Bollinger (20, 2)</span>
+    </div>
+    <div id="status"></div>
+  </header>
+  <div id="chart"></div>
+  <footer>
+    Время — локальное. Графики:
+    <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a>
+    Lightweight Charts™ (Apache 2.0).
+  </footer>
+
+  <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+  <script>
+    const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    const chart = LightweightCharts.createChart(document.getElementById("chart"), {
+      autoSize: true,
+      layout: { background: { color: dark ? "#0d1117" : "#ffffff" },
+                textColor: dark ? "#e6edf3" : "#1f2328", attributionLogo: true },
+      grid: { vertLines: { color: dark ? "#21262d" : "#eef1f4" },
+              horzLines: { color: dark ? "#21262d" : "#eef1f4" } },
+      timeScale: { timeVisible: true, secondsVisible: false },
+    });
+    const candles = chart.addCandlestickSeries();
+    const line = (color, width = 2) => chart.addLineSeries({
+      color, lineWidth: width, priceLineVisible: false, lastValueVisible: false,
+    });
+    const lines = {
+      ema20: line("#f5a623"), ema50: line("#4a90e2"), ema200: line("#bd10e0"),
+      bb_upper: line("#8b949e", 1), bb_middle: line("#8b949e", 1), bb_lower: line("#8b949e", 1),
+    };
+
+    // Сервер отдаёт время в UTC; сдвигаем на часовой пояс компьютера.
+    const local = (t) => t - new Date(t * 1000).getTimezoneOffset() * 60;
+    const status = document.getElementById("status");
+    const symbolSel = document.getElementById("symbol");
+    const tfSel = document.getElementById("timeframe");
+
+    async function load() {
+      status.textContent = "загрузка…";
+      const params = new URLSearchParams({ symbol: symbolSel.value, timeframe: tfSel.value,
+                                           limit: 1000 });
+      const response = await fetch("/api/candles?" + params);
+      if (!response.ok) { status.textContent = "ошибка " + response.status; return; }
+      const data = await response.json();
+      const rows = data.candles;
+      candles.setData(rows.map((r) => ({ time: local(r.time), open: r.open, high: r.high,
+                                         low: r.low, close: r.close })));
+      for (const [name, series] of Object.entries(lines)) {
+        series.setData(rows.filter((r) => r[name] !== null)
+                           .map((r) => ({ time: local(r.time), value: r[name] })));
+      }
+      chart.timeScale().fitContent();
+      status.textContent = rows.length
+        ? `${rows.length} свечей, последняя ${new Date(rows.at(-1).time * 1000).toLocaleString()}`
+        : "нет данных — сначала загрузите историю";
+    }
+
+    (async () => {
+      const meta = await (await fetch("/api/symbols")).json();
+      symbolSel.innerHTML = meta.symbols.map((s) => `<option>${s}</option>`).join("");
+      tfSel.innerHTML = meta.timeframes.map((t) => `<option>${t}</option>`).join("");
+      tfSel.value = "1h";
+      symbolSel.onchange = tfSel.onchange = load;
+      load();
+    })();
+  </script>
+</body>
+</html>
