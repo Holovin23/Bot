@@ -5,6 +5,7 @@ description = "Торговый бот для Bybit Demo Trading"
 readme = "docs/README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "pybit>=5.17.0",
     "pydantic>=2.14.1",
     "pydantic-settings>=2.15.0",
     "pyyaml>=6.0.3",
@@ -46,3 +47,7 @@ packages = ["bot"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+
+[[tool.mypy.overrides]]
+module = ["pybit.*"]
+ignore_missing_imports = true
