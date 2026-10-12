@@ -2,8 +2,8 @@
 .env
 
 # Данные и логи (большие, не для git)
-data/
-logs/
+/data/
+/logs/
 
 # Python
 __pycache__/
