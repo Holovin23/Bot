@@ -1,4 +1,3 @@
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -8,26 +7,10 @@ from bot.core.config import InstrumentConfig, RiskConfig
 from bot.research.baseline import compare_with_random, matched_random_params
 from bot.strategies.random_entry import RandomEntry
 
+from .strategy_helpers import minute_walk as walk
+
 INSTRUMENT = InstrumentConfig(tick_size=0.1, qty_step=0.001, min_qty=0.001)
 COSTS = CostModel(slippage={"BTCUSDT": 0.0003})
-
-
-def walk(days: int = 60, seed: int = 0) -> pd.DataFrame:
-    n = days * 1440
-    rng = np.random.default_rng(seed)
-    close = 40_000 * np.exp(np.cumsum(rng.normal(0, 0.0008, n)))
-    open_ = np.r_[close[0], close[:-1]]
-    return pd.DataFrame(
-        {
-            "open_time": pd.date_range("2024-01-01", periods=n, freq="1min", tz="UTC"),
-            "open": open_,
-            "high": np.maximum(open_, close) * 1.0003,
-            "low": np.minimum(open_, close) * 0.9997,
-            "close": close,
-            "volume": 1.0,
-            "turnover": close,
-        }
-    )
 
 
 def backtest(strategy: RandomEntry, candles: pd.DataFrame):  # type: ignore[no-untyped-def]

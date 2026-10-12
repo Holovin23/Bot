@@ -22,3 +22,21 @@ def random_bars(count: int, timeframe_minutes: int = 60, seed: int = 7) -> pd.Da
             "turnover": close,
         }
     )
+
+
+def minute_walk(days: int = 60, seed: int = 0) -> pd.DataFrame:
+    n = days * 1440
+    rng = np.random.default_rng(seed)
+    close = 40_000 * np.exp(np.cumsum(rng.normal(0, 0.0008, n)))
+    open_ = np.r_[close[0], close[:-1]]
+    return pd.DataFrame(
+        {
+            "open_time": pd.date_range("2024-01-01", periods=n, freq="1min", tz="UTC"),
+            "open": open_,
+            "high": np.maximum(open_, close) * 1.0003,
+            "low": np.minimum(open_, close) * 0.9997,
+            "close": close,
+            "volume": 1.0,
+            "turnover": close,
+        }
+    )
