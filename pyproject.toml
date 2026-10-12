@@ -5,6 +5,8 @@ description = "Торговый бот для Bybit Demo Trading"
 readme = "docs/README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "pandas>=3.0.6",
+    "pyarrow>=26.0.0",
     "pybit>=5.17.0",
     "pydantic>=2.14.1",
     "pydantic-settings>=2.15.0",
@@ -18,6 +20,7 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
     "types-pyyaml>=6.0.12.20260906",
+    "pandas-stubs>=3.0.5.260914",
 ]
 
 [build-system]
