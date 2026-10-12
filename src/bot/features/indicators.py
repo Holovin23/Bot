@@ -79,3 +79,67 @@ def true_range(df: pd.DataFrame) -> pd.Series:
 
 def atr(df: pd.DataFrame, length: int = 14) -> pd.Series:
     return rma(true_range(df), length)
+
+
+def rsi(values: pd.Series, length: int = 14) -> pd.Series:
+    """RSI Уайлдера (как ta.rsi в Pine): 100 − 100 / (1 + RMA(рост) / RMA(падение)).
+    Нет падений — 100, нет ростов — 0."""
+    change = values.diff()
+    up = rma(change.clip(lower=0), length)
+    down = rma((-change).clip(lower=0), length)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        result = 100 - 100 / (1 + up / down)
+    result = result.where(down != 0, 100.0).where(up != 0, 0.0)
+    out: pd.Series = result.where(up.notna() & down.notna())
+    return out
+
+
+def adx(df: pd.DataFrame, length: int = 14) -> pd.DataFrame:
+    """ADX и +DI/−DI по Уайлдеру (как ta.dmi в Pine). Колонки: plus_di, minus_di, adx."""
+    up = df["high"].diff()
+    down = -df["low"].diff()
+    plus_dm = pd.Series(np.where((up > down) & (up > 0), up, 0.0), index=df.index)
+    minus_dm = pd.Series(np.where((down > up) & (down > 0), down, 0.0), index=df.index)
+    plus_dm.iloc[0] = minus_dm.iloc[0] = np.nan  # у первой свечи нет предыдущей
+    tr = true_range(df)
+    tr.iloc[0] = np.nan
+    smoothed_tr = rma(tr, length)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        plus_di = 100 * rma(plus_dm, length) / smoothed_tr
+        minus_di = 100 * rma(minus_dm, length) / smoothed_tr
+    total = plus_di + minus_di
+    dx = 100 * (plus_di - minus_di).abs() / total.where(total != 0, 1.0)
+    return pd.DataFrame({"plus_di": plus_di, "minus_di": minus_di, "adx": rma(dx, length)})
+
+
+def bollinger_width(values: pd.Series, length: int = 20, std: float = 2.0) -> pd.Series:
+    """Относительная ширина полос: (верх − низ) / средняя."""
+    bands = bollinger(values, length, std)
+    width: pd.Series = (bands["bb_upper"] - bands["bb_lower"]) / bands["bb_middle"]
+    return width
+
+
+def percentile_rank(values: pd.Series, length: int) -> pd.Series:
+    """Доля значений среди последних length (включая текущее), которые <= текущего.
+    1.0 — текущее самое большое, 1/length — самое маленькое."""
+    data = values.to_numpy(dtype="float64")
+    out = np.full(len(data), np.nan)
+    chunk = 20_000
+    for start in range(length - 1, len(data), chunk):
+        stop = min(start + chunk, len(data))
+        window = np.lib.stride_tricks.sliding_window_view(data[start - length + 1 : stop], length)
+        current = window[:, -1:]
+        rank = (window <= current).mean(axis=1)
+        rank[np.isnan(window).any(axis=1)] = np.nan
+        out[start:stop] = rank
+    return pd.Series(out, index=values.index)
+
+
+def rolling_max(values: pd.Series, length: int) -> pd.Series:
+    result: pd.Series = values.rolling(length).max()
+    return result
+
+
+def rolling_min(values: pd.Series, length: int) -> pd.Series:
+    result: pd.Series = values.rolling(length).min()
+    return result
