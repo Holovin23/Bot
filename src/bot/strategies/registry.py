@@ -6,9 +6,11 @@ from typing import Any
 
 from bot.strategies.base import BaseStrategy
 from bot.strategies.random_entry import RandomEntry
+from bot.strategies.trend_following import TrendFollowing
 
 STRATEGIES: dict[str, type[BaseStrategy]] = {
     RandomEntry.name: RandomEntry,
+    TrendFollowing.name: TrendFollowing,
 }
 
 
