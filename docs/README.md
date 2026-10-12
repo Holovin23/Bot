@@ -14,6 +14,7 @@
 | 8 | [08-ai-assisted-development.md](08-ai-assisted-development.md) | Как вести разработку с ИИ-ассистентом, если вы новичок |
 | 9 | [09-start-checklist.md](09-start-checklist.md) | Готовность к старту, конкретные значения, что нужно от вас |
 | — | [tasks/stage-0-1.md](tasks/stage-0-1.md) | Готовые задачи этапов 0 и 1 для Claude Code |
+| — | [tasks/stage-0-1-verify.md](tasks/stage-0-1-verify.md) | Как проверить этапы 0 и 1 на своём компьютере: команды по шагам |
 
 Инструкции для ИИ-ассистента, который пишет код, лежат в [`../CLAUDE.md`](../CLAUDE.md).
 
