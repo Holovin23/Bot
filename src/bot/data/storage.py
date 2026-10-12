@@ -61,8 +61,12 @@ class _MonthlyParquet:
 
     def _empty(self) -> pd.DataFrame:
         return _normalize(
-            pd.DataFrame({c: pd.Series(dtype=TIME_DTYPE if c == self.key else "float64")
-                          for c in self.columns}),
+            pd.DataFrame(
+                {
+                    c: pd.Series(dtype=TIME_DTYPE if c == self.key else "float64")
+                    for c in self.columns
+                }
+            ),
             self.columns,
             self.key,
         )
@@ -128,7 +132,9 @@ class Storage:
         self.root = root
 
     def _klines(self, symbol: str, timeframe: str) -> _MonthlyParquet:
-        return _MonthlyParquet(self.root / "klines" / symbol / timeframe, CANDLE_COLUMNS, "open_time")
+        return _MonthlyParquet(
+            self.root / "klines" / symbol / timeframe, CANDLE_COLUMNS, "open_time"
+        )
 
     def _funding(self, symbol: str) -> _MonthlyParquet:
         return _MonthlyParquet(self.root / "funding" / symbol, FUNDING_COLUMNS, "time")

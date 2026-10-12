@@ -82,7 +82,9 @@ class RestCaller:
                     raise
                 status = getattr(error, "status_code", None)
                 pause = IP_BAN_PAUSE_S if status == 403 else min(2.0**attempt, 60.0)
-                log.warning("request_failed_retrying", attempt=attempt, pause_s=pause, error=str(error))
+                log.warning(
+                    "request_failed_retrying", attempt=attempt, pause_s=pause, error=str(error)
+                )
                 self.sleep(pause)
         raise AssertionError("unreachable")
 
