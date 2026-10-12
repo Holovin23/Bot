@@ -1,0 +1,29 @@
+# Живой бот (этап 7): paper — виртуальные сделки по живым ценам, demo — Bybit Demo Trading.
+# Реального счёта здесь нет: mode принимает только paper или demo.
+# Лимиты риска — в config/default.yaml (разделы risk и limits), они общие с бэктестом.
+
+mode: paper
+
+# Стартовый капитал для paper (в demo капитал берётся с биржи)
+paper_capital: 10000
+
+# Сверка с биржей (reconcile) — раз в столько минут
+reconcile_minutes: 1
+
+# Позиция на бирже, которую бот не открывал: false — только предупредить и поставить
+# аварийный стоп; true — закрыть
+close_unknown: false
+unknown_stop_pct: 0.02
+
+# Сколько дней 1m-истории читать для индикаторов стратегии
+history_days: 30
+
+# Какие стратегии запускать. Параметры — как в бэктесте (--param).
+# ml_filter: true — использовать модель data/models/<стратегия>_<символ>_<таймфрейм>.joblib
+# (включать, только если фильтр признан полезным на validation).
+instances:
+  - strategy: breakout
+    symbol: BTCUSDT
+    timeframe: 1h
+    params: {}
+    ml_filter: false

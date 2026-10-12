@@ -203,11 +203,11 @@ class Store:
 
     # --- состояние риска и kill switch ------------------------------------------
 
-    def _get(self, key: str) -> str | None:
+    def get_value(self, key: str) -> str | None:
         row = self.conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
         return str(row["value"]) if row else None
 
-    def _set(self, key: str, value: str) -> None:
+    def set_value(self, key: str, value: str) -> None:
         self.conn.execute(
             "INSERT INTO kv (key, value) VALUES (?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -216,7 +216,7 @@ class Store:
         self.conn.commit()
 
     def get_risk_state(self) -> RiskState | None:
-        raw = self._get(f"{RISK_STATE_KEY}:{self.mode}")
+        raw = self.get_value(f"{RISK_STATE_KEY}:{self.mode}")
         if raw is None:
             return None
         data = json.loads(raw)
@@ -226,13 +226,13 @@ class Store:
     def set_risk_state(self, state: RiskState) -> None:
         data = asdict(state)
         data["day"] = state.day.isoformat()
-        self._set(f"{RISK_STATE_KEY}:{self.mode}", json.dumps(data, ensure_ascii=False))
+        self.set_value(f"{RISK_STATE_KEY}:{self.mode}", json.dumps(data, ensure_ascii=False))
 
     def request_kill(self, reason: str) -> None:
-        self._set(KILL_KEY, reason or "аварийная остановка")
+        self.set_value(KILL_KEY, reason or "аварийная остановка")
 
     def kill_reason(self) -> str | None:
-        value = self._get(KILL_KEY)
+        value = self.get_value(KILL_KEY)
         return value or None
 
     def clear_kill(self) -> None:
