@@ -54,6 +54,7 @@ from bot.strategies.registry import create_strategy
 log = get_logger(__name__)
 
 KILL_FILE = "KILL"
+RESUME_FILE = "RESUME"
 PAPER_CASH_KEY = "paper_cash"
 FUNDING_HOURS = (0, 8, 16)
 MINUTE = pd.Timedelta(minutes=1)
@@ -440,8 +441,14 @@ class LiveBot:
     # --- аварийная остановка ------------------------------------------------------------
 
     def check_kill_file(self) -> None:
+        """Команды из интерфейса и ручные: файлы data/KILL и data/RESUME."""
+        resume_file = self.kill_file.with_name(RESUME_FILE)
+        if resume_file.exists():
+            resume_file.unlink()
+            self.resume()
         if self.kill_file.exists() and not self.store.kill_reason():
-            self.kill("файл data/KILL")
+            text = self.kill_file.read_text(encoding="utf-8").strip()
+            self.kill(text or "файл data/KILL")
 
     def kill(self, reason: str) -> None:
         """Отменить ордера, закрыть позиции, не открывать новых до /resume."""

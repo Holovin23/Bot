@@ -53,6 +53,11 @@
     .row input[type=date] { width: auto; }
     #tradeinfo { padding: 4px 16px; color: var(--muted); min-height: 1.4em; }
     #tradeinfo b { color: var(--fg); font-weight: 600; }
+    button.danger { color: #fff; background: #cf222e; border: 1px solid #a40e26;
+      border-radius: 6px; padding: 3px 10px; cursor: pointer; font: inherit; }
+    #tab-bot h4 { margin: 10px 0 4px; }
+    #tab-bot td, #tab-bot th { text-align: left; }
+    .lvl-warning { color: #9a6700; } .lvl-error { color: #cf222e; }
     footer { padding: 4px 16px; color: var(--muted); font-size: 12px;
       border-top: 1px solid var(--border); }
     footer a { color: inherit; }
@@ -81,11 +86,24 @@
       <button data-tab="report">Отчёт</button>
       <button data-tab="run">Запуск</button>
       <button data-tab="telegram">Telegram</button>
+      <button data-tab="bot">Бот</button>
     </div>
     <div id="tab-trades" class="tab active"><p class="hint">Выберите бэктест.</p></div>
     <div id="tab-equity" class="tab"><div id="equity"></div></div>
     <div id="tab-report" class="tab"><pre id="report" class="hint">Выберите бэктест.</pre></div>
     <div id="tab-telegram" class="tab"><p class="hint">Загрузка…</p></div>
+    <div id="tab-bot" class="tab">
+      <div class="row">
+        <label>Режим <select id="b-mode"><option>paper</option><option>demo</option></select></label>
+        <button id="b-kill" class="danger">Аварийная остановка</button>
+        <button id="b-resume">Возобновить</button>
+        <span id="b-msg" class="hint"></span>
+      </div>
+      <div id="b-state"></div>
+      <h4>Открытые сделки</h4><div id="b-open"></div>
+      <h4>Закрытые сделки</h4><div id="b-closed"></div>
+      <h4>События</h4><div id="b-events"></div>
+    </div>
     <div id="tab-run" class="tab">
       <form id="runform">
         <div class="row">
@@ -219,6 +237,7 @@
         t.classList.toggle("active", t.id === "tab-" + b.dataset.tab));
       if (b.dataset.tab === "equity") requestAnimationFrame(() => equityChart.timeScale().fitContent());
       if (b.dataset.tab === "telegram") loadTelegram();
+      if (b.dataset.tab === "bot") loadBot();
     });
 
     const equityChart = LightweightCharts.createChart(document.getElementById("equity"), {
@@ -341,6 +360,58 @@
           `<div>ИИ: ${summary}</div></div>`;
       }).join("");
     }
+
+    // Вкладка «Бот»: состояние живого бота (paper / demo) и аварийная остановка
+    const num = (x, d = 2) => (x === null || x === undefined ? "—" : Number(x).toFixed(d));
+    function tradeTable(rows, closed) {
+      if (!rows.length) return `<p class="hint">нет</p>`;
+      const head = closed ? "<th>Выход</th><th>Причина</th><th>Результат</th>"
+        : "<th>Стоп</th><th>Тейк</th><th>Свечей</th>";
+      return `<table><thead><tr><th>Сигнал</th><th>Сторона</th><th>Объём</th><th>Вход</th>` +
+        `${head}<th>Статус</th></tr></thead><tbody>` + rows.map((t) => {
+          const tail = closed
+            ? `<td>${num(t.exit_price)}</td><td>${t.exit_reason || "—"}</td>` +
+              `<td class="${(t.net_pnl || 0) >= 0 ? "win" : "loss"}">${num(t.net_pnl)}</td>`
+            : `<td>${num(t.stop)}</td><td>${num(t.take)}</td><td>${t.bars_held}</td>`;
+          return `<tr><td>${escapeHtml(t.signal_id)}</td><td>${t.side}</td><td>${t.qty}</td>` +
+            `<td>${num(t.entry_price)}</td>${tail}<td>${t.status}</td></tr>`;
+        }).join("") + "</tbody></table>";
+    }
+    async function loadBot() {
+      const mode = document.getElementById("b-mode").value;
+      const d = await (await fetch("/api/bot?mode=" + mode)).json();
+      const r = d.risk;
+      let state = r
+        ? `Капитал <b>${num(r.equity)}</b>, пик ${num(r.peak_equity)}, ` +
+          `начало дня ${num(r.day_start_equity)}, убытков подряд ${r.loss_streak}`
+        : `<span class="hint">бот в режиме ${mode} ещё не запускался ` +
+          `(<code>uv run python -m bot.runner.live --mode ${mode}</code>)</span>`;
+      if (d.kill) state += ` · <span class="loss">ОСТАНОВЛЕН: ${escapeHtml(d.kill)}</span>`;
+      else if (d.kill_file) state += ` · <span class="loss">остановка запрошена</span>`;
+      if (r && r.halted) state += ` · <span class="loss">${escapeHtml(r.halted)}</span>`;
+      if (r && r.paused) state += ` · <span class="lvl-warning">пауза: ${escapeHtml(r.paused)}</span>`;
+      document.getElementById("b-state").innerHTML = state;
+      document.getElementById("b-open").innerHTML = tradeTable(d.trades, false);
+      document.getElementById("b-closed").innerHTML = tradeTable(d.closed, true);
+      document.getElementById("b-events").innerHTML = d.events.length
+        ? d.events.map((e) => `<div class="lvl-${e.level}">${e.time.slice(0, 19).replace("T", " ")}` +
+            ` · ${e.kind} · ${escapeHtml(e.message)}</div>`).join("")
+        : `<p class="hint">нет</p>`;
+    }
+    document.getElementById("b-mode").onchange = loadBot;
+    document.getElementById("b-kill").onclick = async () => {
+      if (!confirm("Закрыть все позиции и остановить торговлю?")) return;
+      const d = await (await fetch("/api/bot/kill", { method: "POST" })).json();
+      document.getElementById("b-msg").textContent = d.status;
+      loadBot();
+    };
+    document.getElementById("b-resume").onclick = async () => {
+      const d = await (await fetch("/api/bot/resume", { method: "POST" })).json();
+      document.getElementById("b-msg").textContent = d.status;
+    };
+    setInterval(() => {
+      if (document.getElementById("tab-bot").classList.contains("active")) loadBot();
+    }, 10000);
 
     // Запуск бэктеста из интерфейса
     let catalog = [];

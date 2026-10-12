@@ -248,3 +248,43 @@ def test_telegram_feed(tmp_path: Path) -> None:
     assert posts[1]["views"] == [{"symbol": "BTCUSDT", "bias": "BULLISH", "horizon": "SWING"}]
     assert posts[2]["summary"] is None
     assert _json.dumps(posts[1])
+
+
+def test_bot_tab_status_and_commands(tmp_path: Path) -> None:
+    from datetime import UTC, date, datetime
+
+    from bot.core.db import connect
+    from bot.core.models import Side, Signal
+    from bot.execution.store import Store
+    from bot.risk.limits import RiskState
+
+    client = make_client(tmp_path)
+    empty = client.get("/api/bot").json()
+    assert empty["running"] is False and empty["trades"] == []
+
+    store = Store(connect(tmp_path / "bot.sqlite"), "paper")
+    sig = Signal.create(
+        strategy="breakout",
+        strategy_version="1",
+        symbol="BTCUSDT",
+        timeframe="1h",
+        bar_time=datetime(2026, 10, 12, 10, 0, tzinfo=UTC),
+        side=Side.LONG,
+        entry_price=65450,
+        stop_loss=65000,
+    )
+    store.add_trade(sig, 0.1, 45)
+    store.set_risk_state(RiskState(10_000, 10_100, date(2026, 10, 12), 10_050))
+    store.add_event("start", "бот запущен")
+    data = client.get("/api/bot?mode=paper").json()
+    assert data["running"] and data["risk"]["peak_equity"] == 10_100
+    assert data["trades"][0]["signal_id"] == sig.signal_id
+    assert data["events"][0]["message"] == "бот запущен"
+    assert client.get("/api/bot?mode=demo").json()["trades"] == []
+    assert client.get("/api/bot?mode=live").status_code == 422
+
+    assert client.post("/api/bot/kill").status_code == 200
+    assert (tmp_path / "KILL").read_text(encoding="utf-8") == "кнопка в интерфейсе"
+    assert client.get("/api/bot").json()["kill_file"] is True
+    client.post("/api/bot/resume")
+    assert (tmp_path / "RESUME").exists()

@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from bot.app.backtests import list_backtests, load_backtest, load_equity, load_report
+from bot.app.bot_status import bot_status, request_kill, request_resume
 from bot.app.jobs import JobRunner, RunFn
 from bot.backtest.report import run_report
 from bot.core.config import load_config
@@ -218,6 +219,20 @@ def create_app(
         if job is None:
             raise HTTPException(404, "Нет такого запуска")
         return {"status": job.status, "backtest_id": job.backtest_id, "error": job.error}
+
+    @app.get("/api/bot")
+    def get_bot(mode: str = Query(default="paper", pattern="^(paper|demo)$")) -> dict[str, Any]:
+        return bot_status(storage.root, mode)
+
+    @app.post("/api/bot/kill")
+    def post_kill() -> dict[str, str]:
+        request_kill(storage.root, "кнопка в интерфейсе")
+        return {"status": "запрошена аварийная остановка: бот выполнит её в течение минуты"}
+
+    @app.post("/api/bot/resume")
+    def post_resume() -> dict[str, str]:
+        request_resume(storage.root)
+        return {"status": "запрошено возобновление: бот выполнит его в течение минуты"}
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app
