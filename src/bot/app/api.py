@@ -1,4 +1,5 @@
-"""Локальный веб-интерфейс: свечи и индикаторы на TradingView Lightweight Charts.
+"""Локальный веб-интерфейс: свечи, индикаторы и сделки бэктестов
+на TradingView Lightweight Charts.
 
 Запуск:
     uv run python -m bot.app.api
@@ -16,6 +17,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from bot.app.backtests import list_backtests, load_backtest
 from bot.core.config import load_config
 from bot.core.timeframes import timeframe_minutes
 from bot.data.resample import resample_candles
@@ -34,13 +36,20 @@ def _clean(value: float) -> float | None:
     return None if math.isnan(value) else round(float(value), 8)
 
 
-def build_chart_data(storage: Storage, symbol: str, timeframe: str, limit: int) -> dict[str, Any]:
+def build_chart_data(
+    storage: Storage, symbol: str, timeframe: str, limit: int, until: int | None = None
+) -> dict[str, Any]:
+    """limit последних свечей; until (секунды UTC) — показать свечи до этого момента."""
     last = storage.last_candle_time(symbol, "1m")
     if last is None:
         return {"symbol": symbol, "timeframe": timeframe, "candles": []}
     minutes = timeframe_minutes(timeframe)
+    end = None
+    if until is not None:
+        end = pd.Timestamp(until, unit="s", tz="UTC").ceil(f"{minutes}min")
+        last = min(last, end - pd.Timedelta(minutes=1))
     start = (last - pd.Timedelta(minutes=minutes * (limit + WARMUP_BARS))).floor(f"{minutes}min")
-    df = resample_candles(storage.read_candles(symbol, "1m", start=start), timeframe)
+    df = resample_candles(storage.read_candles(symbol, "1m", start=start, end=end), timeframe)
 
     for length in EMA_LENGTHS:
         df[f"ema{length}"] = ema(df["close"], length)
@@ -60,8 +69,9 @@ def build_chart_data(storage: Storage, symbol: str, timeframe: str, limit: int) 
     return {"symbol": symbol, "timeframe": timeframe, "candles": candles}
 
 
-def create_app(storage: Storage, symbols: list[str]) -> FastAPI:
+def create_app(storage: Storage, symbols: list[str], backtests_dir: Path | None = None) -> FastAPI:
     app = FastAPI(title="Bot")
+    backtests_root = backtests_dir if backtests_dir is not None else storage.root / "backtests"
 
     @app.get("/")
     def index() -> FileResponse:
@@ -76,12 +86,24 @@ def create_app(storage: Storage, symbols: list[str]) -> FastAPI:
         symbol: str,
         timeframe: str = "1h",
         limit: int = Query(default=500, ge=10, le=5000),
+        until: int | None = Query(default=None, ge=0),
     ) -> dict[str, Any]:
         if symbol not in symbols:
             raise HTTPException(404, f"Неизвестный символ {symbol}")
         if timeframe not in TIMEFRAMES:
             raise HTTPException(400, f"Таймфрейм должен быть одним из {TIMEFRAMES}")
-        return build_chart_data(storage, symbol, timeframe, limit)
+        return build_chart_data(storage, symbol, timeframe, limit, until)
+
+    @app.get("/api/backtests")
+    def get_backtests() -> dict[str, list[dict[str, Any]]]:
+        return {"backtests": list_backtests(backtests_root)}
+
+    @app.get("/api/backtests/{backtest_id}")
+    def get_backtest(backtest_id: str) -> dict[str, Any]:
+        data = load_backtest(backtests_root, backtest_id)
+        if data is None:
+            raise HTTPException(404, f"Нет бэктеста {backtest_id}")
+        return data
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app

@@ -59,3 +59,59 @@ def test_empty_symbol_and_page(tmp_path: Path) -> None:
     assert "TradingView" in page.text
     js = client.get("/static/vendor/lightweight-charts.standalone.production.js")
     assert js.status_code == 200
+
+
+def write_backtest(root: Path, name: str) -> None:
+    folder = root / name
+    folder.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "signal_id": ["rnd-1"],
+            "side": ["LONG"],
+            "entry_time": ["2024-03-01 11:00:00+00:00"],
+            "exit_time": ["2024-03-01 15:04:00+00:00"],
+            "entry_price": [101.0],
+            "exit_price": [99.5],
+            "initial_stop": [99.5],
+            "stop": [99.5],
+            "take": [None],
+            "exit_reason": ["stop"],
+            "r_multiple": [-1.0],
+            "net_pnl": [-50.0],
+        }
+    ).to_csv(folder / "trades.csv", index=False)
+
+
+def test_backtests_list_and_trades(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    root = tmp_path / "backtests"
+    write_backtest(root, "20261012-100000_mean_reversion_BTCUSDT_1h")
+    write_backtest(root, "20261012-110000_breakout_ETHUSDT_5m")
+    (root / "20261012-120000_grid_breakout_BTCUSDT_1h").mkdir()  # перебор: нет trades.csv
+
+    items = client.get("/api/backtests").json()["backtests"]
+    assert [b["id"] for b in items] == [
+        "20261012-110000_breakout_ETHUSDT_5m",
+        "20261012-100000_mean_reversion_BTCUSDT_1h",
+    ]
+    assert items[1]["strategy"] == "mean_reversion"
+    assert items[1]["timeframe"] == "1h"
+
+    data = client.get("/api/backtests/20261012-100000_mean_reversion_BTCUSDT_1h").json()
+    trade = data["trades"][0]
+    assert trade["number"] == 1
+    assert trade["entry_time"] == int(pd.Timestamp("2024-03-01 11:00", tz="UTC").timestamp())
+    assert trade["take"] is None
+    assert trade["r_multiple"] == -1.0
+    assert client.get("/api/backtests/..").status_code == 404
+    assert client.get("/api/backtests/20261012-000000_x_BTCUSDT_1h").status_code == 404
+
+
+def test_candles_until(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    until = int(pd.Timestamp("2024-03-02 05:30", tz="UTC").timestamp())
+    params = {"symbol": "BTCUSDT", "timeframe": "1h", "limit": 10, "until": until}
+    candles = client.get("/api/candles", params=params).json()["candles"]
+    assert len(candles) == 10
+    # Свеча 05:00 содержит момент until — она последняя
+    assert candles[-1]["time"] == int(pd.Timestamp("2024-03-02 05:00", tz="UTC").timestamp())

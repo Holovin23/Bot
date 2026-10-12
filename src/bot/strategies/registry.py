@@ -1,0 +1,29 @@
+"""Список стратегий, доступных из командной строки по имени."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from bot.strategies.base import BaseStrategy
+from bot.strategies.breakout import Breakout
+from bot.strategies.mean_reversion import MeanReversion
+from bot.strategies.random_entry import RandomEntry
+from bot.strategies.trend_following import TrendFollowing
+
+STRATEGIES: dict[str, type[BaseStrategy]] = {
+    Breakout.name: Breakout,
+    MeanReversion.name: MeanReversion,
+    RandomEntry.name: RandomEntry,
+    TrendFollowing.name: TrendFollowing,
+}
+
+
+def create_strategy(
+    name: str, timeframe: str, params: dict[str, Any] | None = None
+) -> BaseStrategy:
+    try:
+        cls = STRATEGIES[name]
+    except KeyError:
+        known = ", ".join(sorted(STRATEGIES))
+        raise ValueError(f"Неизвестная стратегия {name!r}. Есть: {known}") from None
+    return cls(timeframe, params)

@@ -4,7 +4,17 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from bot.features.indicators import atr, bollinger, ema, rma, true_range
+from bot.features.indicators import (
+    adx,
+    atr,
+    bollinger,
+    bollinger_width,
+    ema,
+    percentile_rank,
+    rma,
+    rsi,
+    true_range,
+)
 
 
 def test_rma_by_hand() -> None:
@@ -76,3 +86,61 @@ def test_matches_pandas_ta() -> None:
     expected_atr = ta.atr(df["high"], df["low"], close, length=14)
     ours = atr(df, 14)
     assert np.allclose(ours, expected_atr, equal_nan=True)
+
+
+def test_rsi_by_hand() -> None:
+    # length 2. Изменения: +2, −1, +3, −2
+    # рост: [2, 0, 3, 0] -> RMA(2): среднее (2, 0) = 1; (1 + 3) / 2 = 2; (2 + 0) / 2 = 1
+    # падение: [0, 1, 0, 2] -> 0.5; 0.25; 1.125
+    # RSI на последней: 100 − 100 / (1 + 1 / 1.125) = 47.0588
+    out = rsi(pd.Series([10.0, 12.0, 11.0, 14.0, 12.0]), 2)
+    assert math.isnan(out[1])
+    assert out[2] == pytest.approx(100 - 100 / (1 + 1 / 0.5))
+    assert out[4] == pytest.approx(47.0588235)
+
+
+def test_rsi_extremes() -> None:
+    assert rsi(pd.Series([1.0, 2, 3, 4, 5]), 2).iloc[-1] == 100
+    assert rsi(pd.Series([5.0, 4, 3, 2, 1]), 2).iloc[-1] == 0
+
+
+def test_adx_by_hand_strong_uptrend() -> None:
+    # Каждая свеча выше предыдущей: +DM > 0, −DM = 0 -> −DI = 0, +DI > 0, DX = 100, ADX -> 100
+    df = pd.DataFrame(
+        {
+            "high": [11.0, 12, 13, 14, 15, 16, 17],
+            "low": [9.0, 10, 11, 12, 13, 14, 15],
+            "close": [10.5, 11.5, 12.5, 13.5, 14.5, 15.5, 16.5],
+        }
+    )
+    out = adx(df, 2)
+    # TR (кроме первой) = max(2, |high − prev close| = 1.5, |low − prev close| = 0.5) = 2
+    # +DM = 1 -> +DI = 100 × 1 / 2 = 50
+    assert out["plus_di"].iloc[-1] == pytest.approx(50)
+    assert out["minus_di"].iloc[-1] == 0
+    assert out["adx"].iloc[-1] == pytest.approx(100)
+
+
+def test_percentile_rank_and_width() -> None:
+    values = pd.Series([5.0, 3.0, 4.0, 1.0, 2.0, 6.0])
+    rank = percentile_rank(values, 3)
+    # окно [5, 3, 4]: <= 4 два из трёх; [3, 4, 1]: 1 — минимум, 1/3; [1, 2, 6]: 6 — максимум
+    assert rank.iloc[2] == pytest.approx(2 / 3)
+    assert rank.iloc[3] == pytest.approx(1 / 3)
+    assert rank.iloc[5] == 1.0
+    assert rank.iloc[:2].isna().all()
+    # ширина BB по [1, 2, 3, 6] (см. выше): 4 × 1.8708 / 3
+    width = bollinger_width(pd.Series([1.0, 2.0, 3.0, 6.0]), length=4)
+    assert width.iloc[-1] == pytest.approx(4 * 1.8708287 / 3)
+
+
+def test_rsi_adx_match_pandas_ta() -> None:
+    ta = pytest.importorskip("pandas_ta")
+    df = random_candles(800)
+    # pandas-ta начинает RSI с другой затравки; к 300-й свече разница исчезает
+    expected_rsi = ta.rsi(df["close"], length=14)
+    assert np.allclose(rsi(df["close"], 14).iloc[300:], expected_rsi.iloc[300:], atol=1e-6)
+    expected = ta.adx(df["high"], df["low"], df["close"], length=14)
+    ours = adx(df, 14)
+    assert np.allclose(ours["adx"].iloc[300:], expected["ADX_14"].iloc[300:], rtol=1e-4)
+    assert np.allclose(ours["plus_di"].iloc[300:], expected["DMP_14"].iloc[300:], rtol=1e-4)

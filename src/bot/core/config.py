@@ -43,6 +43,17 @@ class CostsConfig(BaseModel):
     initial_capital: float = 10_000.0
 
 
+class InstrumentConfig(BaseModel):
+    tick_size: float
+    qty_step: float
+    min_qty: float
+
+
+class RiskConfig(BaseModel):
+    risk_per_trade: float = Field(default=0.005, gt=0, le=0.02)
+    max_leverage: float = Field(default=3.0, gt=0, le=3.0)
+
+
 class Secrets(BaseSettings):
     """Значения из .env и переменных окружения. Ключи хранятся как SecretStr:
     при печати видно '**********', а не сам ключ."""
@@ -71,6 +82,8 @@ class Config(BaseModel):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     app: AppConfig = Field(default_factory=AppConfig)
     costs: CostsConfig = Field(default_factory=CostsConfig)
+    instruments: dict[str, InstrumentConfig] = Field(default_factory=dict)
+    risk: RiskConfig = Field(default_factory=RiskConfig)
     secrets: Secrets
 
     def resolve(self, path: Path) -> Path:
