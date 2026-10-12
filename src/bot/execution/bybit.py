@@ -7,8 +7,8 @@
 - закрывающие ордера — reduceOnly;
 - one-way режим позиций (positionIdx=0).
 
-Реальный счёт этот класс не открывает: при BYBIT_ENV=live он требует отдельного
-подтверждения (этап 8), которое в этом коде не включено.
+Реальный счёт (этап 8) — только через BybitBroker.live(): BYBIT_ENV=live, ALLOW_LIVE=true
+и подтверждение при старте. По умолчанию всё это выключено.
 """
 
 from __future__ import annotations
@@ -136,6 +136,24 @@ def parse_balance(raw: dict[str, Any]) -> Balance:
     )
 
 
+def _client(secrets: Secrets, demo: bool, timeout: int) -> HTTP:
+    key = secrets.bybit_api_key.get_secret_value()
+    secret = secrets.bybit_api_secret.get_secret_value()
+    if not key or not secret:
+        raise BrokerError("Не заданы BYBIT_API_KEY и BYBIT_API_SECRET")
+    # max_retries=1, force_retry=False: pybit сам не повторяет — повтор только после
+    # поиска ордера (submit_with_retry).
+    return HTTP(
+        testnet=False,
+        demo=demo,
+        api_key=key,
+        api_secret=secret,
+        timeout=timeout,
+        max_retries=1,
+        force_retry=False,
+    )
+
+
 class BybitBroker:
     def __init__(
         self,
@@ -153,24 +171,25 @@ class BybitBroker:
     ) -> BybitBroker:
         if not secrets.is_demo:
             raise BrokerError(
-                "Этап 7 работает только с демо-счётом: BYBIT_ENV=demo. Реальный счёт — этап 8."
+                "Режим demo требует BYBIT_ENV=demo. Реальный счёт — только --mode live (этап 8)."
             )
-        key = secrets.bybit_api_key.get_secret_value()
-        secret = secrets.bybit_api_secret.get_secret_value()
-        if not key or not secret:
-            raise BrokerError("В .env не заданы BYBIT_API_KEY и BYBIT_API_SECRET")
-        # max_retries=1, force_retry=False: pybit сам не повторяет — повтор только после
-        # поиска ордера (submit_with_retry).
-        client = HTTP(
-            testnet=False,
-            demo=True,
-            api_key=key,
-            api_secret=secret,
-            timeout=timeout,
-            max_retries=1,
-            force_retry=False,
-        )
-        return cls(client, instruments, name="demo")
+        return cls(_client(secrets, demo=True, timeout=timeout), instruments, name="demo")
+
+    @classmethod
+    def live(
+        cls,
+        secrets: Secrets,
+        instruments: dict[str, InstrumentConfig],
+        confirmed: bool,
+        timeout: int = 10,
+    ) -> BybitBroker:
+        """Реальный счёт (этап 8). Три условия, все — решение владельца: BYBIT_ENV=live,
+        ALLOW_LIVE=true (в отдельном файле .env.live) и подтверждение при старте."""
+        if secrets.bybit_env != "live" or not secrets.allow_live:
+            raise BrokerError("Реальный счёт выключен: нужны BYBIT_ENV=live и ALLOW_LIVE=true")
+        if not confirmed:
+            raise BrokerError("Реальный счёт не подтверждён при запуске")
+        return cls(_client(secrets, demo=False, timeout=timeout), instruments, name="live")
 
     # --- вызов API с переводом ошибок -------------------------------------------------
 

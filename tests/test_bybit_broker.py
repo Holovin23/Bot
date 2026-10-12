@@ -119,7 +119,17 @@ def test_parse_position_and_empty() -> None:
 
 def test_demo_only() -> None:
     live = Secrets(bybit_env="live", allow_live=True, bybit_api_key="k", bybit_api_secret="s")
-    with pytest.raises(BrokerError, match="только с демо"):
+    with pytest.raises(BrokerError, match="BYBIT_ENV=demo"):
         BybitBroker.demo(live, BTC)
     with pytest.raises(BrokerError, match="BYBIT_API_KEY"):
         BybitBroker.demo(Secrets(_env_file=None), BTC)  # type: ignore[call-arg]
+
+
+def test_live_needs_flags_and_confirmation() -> None:
+    demo = Secrets(_env_file=None, bybit_api_key="k", bybit_api_secret="s")  # type: ignore[call-arg]
+    with pytest.raises(BrokerError, match="выключен"):
+        BybitBroker.live(demo, BTC, confirmed=True)
+    live = Secrets(bybit_env="live", allow_live=True, bybit_api_key="k", bybit_api_secret="s")
+    with pytest.raises(BrokerError, match="не подтверждён"):
+        BybitBroker.live(live, BTC, confirmed=False)
+    assert BybitBroker.live(live, BTC, confirmed=True).name == "live"

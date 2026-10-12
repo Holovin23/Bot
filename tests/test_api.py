@@ -281,7 +281,7 @@ def test_bot_tab_status_and_commands(tmp_path: Path) -> None:
     assert data["trades"][0]["signal_id"] == sig.signal_id
     assert data["events"][0]["message"] == "бот запущен"
     assert client.get("/api/bot?mode=demo").json()["trades"] == []
-    assert client.get("/api/bot?mode=live").status_code == 422
+    assert client.get("/api/bot?mode=real").status_code == 422
 
     assert client.post("/api/bot/kill").status_code == 200
     assert (tmp_path / "KILL").read_text(encoding="utf-8") == "кнопка в интерфейсе"

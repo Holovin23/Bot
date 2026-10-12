@@ -168,3 +168,19 @@ def test_restart_restores_paper_position(tmp_path: Path) -> None:
     [pos] = fresh.get_positions()
     assert pos.signal_id == trade.signal_id and pos.stop_loss == trade.stop
     assert again.store.active_trades()[0].status == "open"
+
+
+def test_live_confirmation_and_account(tmp_path: Path) -> None:
+    from bot.runner.live import confirm_live, load_live_account
+
+    assert confirm_live(1234.9, ask=lambda _: "LIVE 1234")
+    assert not confirm_live(1234.9, ask=lambda _: "yes")
+    with pytest.raises(SystemExit, match="не настроен"):
+        load_live_account(tmp_path / ".env.live")
+    env = tmp_path / ".env.live"
+    env.write_text("BYBIT_ENV=demo\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="ALLOW_LIVE"):
+        load_live_account(env)
+    env.write_text("BYBIT_ENV=live\nALLOW_LIVE=true\n", encoding="utf-8")
+    cfg = load_live_account(env)
+    assert cfg.risk.risk_per_trade == 0.0025 and cfg.limits.daily_loss_halts

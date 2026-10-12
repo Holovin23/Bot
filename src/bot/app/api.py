@@ -221,7 +221,9 @@ def create_app(
         return {"status": job.status, "backtest_id": job.backtest_id, "error": job.error}
 
     @app.get("/api/bot")
-    def get_bot(mode: str = Query(default="paper", pattern="^(paper|demo)$")) -> dict[str, Any]:
+    def get_bot(
+        mode: str = Query(default="paper", pattern="^(paper|demo|live)$"),
+    ) -> dict[str, Any]:
         return bot_status(storage.root, mode)
 
     @app.post("/api/bot/kill")

@@ -26,7 +26,7 @@ from typing import Any
 import pandas as pd
 
 from bot.backtest.costs import CostModel
-from bot.core.config import Config, load_config
+from bot.core.config import PROJECT_ROOT, Config, load_config
 from bot.core.db import connect, db_path
 from bot.core.logging import get_logger, setup_logging
 from bot.core.models import Order, OrderStatus, Position, Side, Signal
@@ -529,21 +529,47 @@ class LiveBot:
         return "\n".join(lines)
 
 
+ENV_LIVE = PROJECT_ROOT / ".env.live"
+
+
+def confirm_live(equity: float, ask: Callable[[str], str] = input) -> bool:
+    """Подтверждение запуска на реальном счёте: ввести LIVE и капитал (целые USDT)."""
+    expected = f"LIVE {int(equity)}"
+    print("ВНИМАНИЕ: запуск на РЕАЛЬНОМ счёте Bybit. Сделки будут с настоящими деньгами.")
+    print(f"Капитал на бирже: {equity:.2f} USDT. Для запуска введите: {expected}")
+    return ask("> ").strip() == expected
+
+
+def load_live_account(env_file: Path = ENV_LIVE) -> Config:
+    """Настройки реального счёта: ключи из .env.live и строгий профиль риска."""
+    if not env_file.exists():
+        raise SystemExit(f"Нет файла {env_file.name}: реальный счёт не настроен (этап 8)")
+    cfg = load_config(env_file=env_file)
+    if cfg.secrets.bybit_env != "live" or not cfg.secrets.allow_live:
+        raise SystemExit(f"В {env_file.name} нужны BYBIT_ENV=live и ALLOW_LIVE=true")
+    return cfg.for_live()
+
+
 def main(argv: list[str] | None = None) -> None:
     from bot.data.bybit_public import make_public_client
     from bot.data.downloader import Downloader
     from bot.data.live_feed import LiveFeed
     from bot.execution.bybit import BybitBroker
 
-    parser = argparse.ArgumentParser(description="Живой бот: paper или Bybit Demo")
-    parser.add_argument("--mode", choices=["paper", "demo"], help="вместо mode из live.yaml")
+    parser = argparse.ArgumentParser(description="Живой бот: paper, Bybit Demo или live")
+    parser.add_argument(
+        "--mode",
+        choices=["paper", "demo", "live"],
+        help="вместо mode из live.yaml; live — реальный счёт (этап 8, нужен .env.live)",
+    )
     parser.add_argument("--config", type=Path, help="настройки (по умолчанию config/live.yaml)")
     parser.add_argument("--hours", type=float, default=24 * 365, help="сколько часов работать")
     args = parser.parse_args(argv)
 
-    cfg = load_config()
+    live = args.mode == "live"
+    cfg = load_live_account() if live else load_config()
     settings = load_live_settings(args.config) if args.config else load_live_settings()
-    if args.mode:
+    if args.mode and not live:
         settings = settings.model_copy(update={"mode": args.mode})
     if not settings.instances:
         raise SystemExit("В config/live.yaml нет ни одной стратегии (instances)")
@@ -551,9 +577,14 @@ def main(argv: list[str] | None = None) -> None:
 
     data_dir = cfg.resolve(cfg.data.dir)
     storage = Storage(data_dir)
-    store = Store(connect(db_path(data_dir), threads=True), settings.mode)
+    store = Store(connect(db_path(data_dir), threads=True), "live" if live else settings.mode)
     broker: Broker
-    if settings.mode == "demo":
+    if live:
+        probe = BybitBroker.live(cfg.secrets, cfg.instruments, confirmed=True)
+        if not confirm_live(probe.get_balance().equity):
+            raise SystemExit("Запуск на реальном счёте отменён")
+        broker = probe
+    elif settings.mode == "demo":
         broker = BybitBroker.demo(cfg.secrets, cfg.instruments)
     else:
         costs = CostModel.from_config(cfg.costs)
@@ -569,7 +600,7 @@ def main(argv: list[str] | None = None) -> None:
         feed.backfill(symbol)
     bot.start()
     notifier.start_commands(bot)
-    print(f"Бот работает в режиме {settings.mode}. Остановить: Ctrl+C")
+    print(f"Бот работает в режиме {broker.name}. Остановить: Ctrl+C")
     print("После остановки позиции остаются на бирже со стопами.")
     try:
         feed.run(args.hours)
