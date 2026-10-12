@@ -17,6 +17,7 @@
 | — | [tasks/stage-0-1-verify.md](tasks/stage-0-1-verify.md) | Как проверить этапы 0 и 1 на своём компьютере: команды по шагам |
 | — | [tasks/stage-2.md](tasks/stage-2.md) | Задачи этапа 2: бэктест-движок |
 | — | [tasks/stage-3.md](tasks/stage-3.md) | Задачи этапа 3: базовые стратегии и сравнение со случайными входами |
+| — | [tasks/stage-4.md](tasks/stage-4.md) | Задачи этапа 4: validation, walk-forward, hold-out, устойчивость |
 
 Инструкции для ИИ-ассистента, который пишет код, лежат в [`../CLAUDE.md`](../CLAUDE.md).
 
