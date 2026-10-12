@@ -101,6 +101,7 @@ def reconcile(
                 store.update_trade(
                     trade.signal_id,
                     status="open",
+                    qty=pos.size,  # при частичном исполнении — фактический объём
                     entry_price=pos.entry_price,
                     opened_at=(pos.opened_at.isoformat() if pos.opened_at else None),
                 )

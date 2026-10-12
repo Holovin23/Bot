@@ -118,6 +118,7 @@ class LiveBot:
         self.state: RiskState | None = None
         # Свечи приходят из потока WebSocket, команды — из потока Telegram.
         self.lock = threading.RLock()
+        self.offline_since: pd.Timestamp | None = None
 
     # --- запуск и состояние риска ----------------------------------------------------
 
@@ -211,6 +212,17 @@ class LiveBot:
             open_time = pd.Timestamp(row["open_time"])
             try:
                 self.on_minute(symbol, row)
+                if self.offline_since is not None:
+                    self.event("connection", f"связь с биржей восстановлена ({open_time})")
+                    self.notify("Связь с биржей восстановлена")
+                    self.offline_since = None
+            except BrokerError as exc:
+                # Нет связи: минуту пропускаем (новых сделок нет — проверка 13 «API
+                # отвечает»), стопы живут на бирже. Сообщаем один раз, а не каждую минуту.
+                if self.offline_since is None:
+                    self.offline_since = open_time
+                    self.event("connection", f"нет связи с биржей: {exc}", "warning")
+                    self.notify(f"Нет связи с биржей: {exc}. Стопы остаются на бирже.")
             except Exception as exc:  # одна ошибка не должна останавливать бота
                 log.exception("minute_failed", symbol=symbol)
                 self.event("error", f"{symbol} {open_time}: {exc}", "error")
