@@ -5,14 +5,19 @@ description = "Торговый бот для Bybit Demo Trading"
 readme = "docs/README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "anthropic>=1.13.0",
     "fastapi>=0.143.0",
+    "joblib>=1.6.0",
+    "lightgbm>=4.7.0",
     "pandas>=3.0.6",
     "pyarrow>=26.0.0",
     "pybit>=5.17.0",
     "pydantic>=2.14.1",
     "pydantic-settings>=2.15.0",
     "pyyaml>=6.0.3",
+    "scikit-learn>=1.9.1",
     "structlog>=26.1.0",
+    "telethon>=1.45.0",
     "uvicorn>=0.54.0",
 ]
 
@@ -56,5 +61,5 @@ testpaths = ["tests"]
 addopts = "-ra"
 
 [[tool.mypy.overrides]]
-module = ["pybit.*"]
+module = ["pybit.*", "sklearn.*", "lightgbm.*", "telethon.*", "joblib.*"]
 ignore_missing_imports = true

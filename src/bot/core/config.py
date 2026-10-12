@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, SecretStr, model_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -54,17 +54,70 @@ class RiskConfig(BaseModel):
     max_leverage: float = Field(default=3.0, gt=0, le=3.0)
 
 
+class LimitsConfig(BaseModel):
+    """Лимиты из docs/05-risk-and-execution.md. Границы полей не дают ослабить их больше
+    значений из 05 — для этого нужно решение владельца и правка кода."""
+
+    max_positions: int = Field(default=2, ge=1, le=2)
+    max_positions_per_symbol: int = Field(default=1, ge=1, le=1)
+    max_total_risk: float = Field(default=0.015, gt=0, le=0.015)
+    correlated_groups: list[list[str]] = Field(default_factory=lambda: [["BTCUSDT", "ETHUSDT"]])
+    correlated_weight: float = Field(default=1.5, ge=1.5)
+    daily_loss: float = Field(default=0.02, gt=0, le=0.02)
+    max_drawdown: float = Field(default=0.10, gt=0, le=0.10)
+    max_loss_streak: int = Field(default=6, ge=1, le=6)
+    min_stop_atr: float = Field(default=0.5, ge=0.5)
+    max_stop_atr: float = Field(default=4.0, gt=0, le=4.0)
+    liq_buffer: float = Field(default=2.0, ge=2.0)
+    maintenance_margin: float = Field(default=0.005, ge=0.005)
+    max_cost_share: float = Field(default=0.2, gt=0, le=0.2)
+    stale_bars: int = Field(default=2, ge=1, le=2)
+    default_min_rr: float = Field(default=1.5, ge=1.0)
+    # Этап 8 (реальный счёт): дневной убыток останавливает торговлю до ручного /resume
+    daily_loss_halts: bool = False
+    # Для отдельных стратегий (05, проверка 2): Mean Reversion — 1,0. random_entry —
+    # исследовательская база, в сравнении получает R:R той стратегии, которую изображает.
+    min_rr: dict[str, float] = Field(
+        default_factory=lambda: {"mean_reversion": 1.0, "random_entry": 1.0}
+    )
+
+    @field_validator("min_rr")
+    @classmethod
+    def _min_rr_floor(cls, value: dict[str, float]) -> dict[str, float]:
+        if any(v < 1.0 for v in value.values()):
+            raise ValueError("минимальный R:R не может быть меньше 1,0 (docs/05)")
+        return value
+
+
+class LiveRiskConfig(BaseModel):
+    """Этап 8: профиль риска для реального счёта. Только строже, чем на демо."""
+
+    risk_per_trade: float = Field(default=0.0025, gt=0, le=0.0025)
+    max_leverage: float = Field(default=3.0, gt=0, le=3.0)
+    max_positions: int = Field(default=1, ge=1, le=2)
+    max_total_risk: float = Field(default=0.005, gt=0, le=0.015)
+    daily_loss: float = Field(default=0.01, gt=0, le=0.02)
+    max_drawdown: float = Field(default=0.05, gt=0, le=0.10)
+
+
 class Secrets(BaseSettings):
     """Значения из .env и переменных окружения. Ключи хранятся как SecretStr:
     при печати видно '**********', а не сам ключ."""
 
-    model_config = SettingsConfigDict(extra="ignore", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        extra="ignore", env_file_encoding="utf-8", env_ignore_empty=True
+    )
 
     bybit_api_key: SecretStr = SecretStr("")
     bybit_api_secret: SecretStr = SecretStr("")
     bybit_env: Literal["demo", "live"] = "demo"
     allow_live: bool = False
     anthropic_api_key: SecretStr = SecretStr("")
+    # Telegram: чтение канала (my.telegram.org) и бот для уведомлений (@BotFather)
+    tg_api_id: int | None = None
+    tg_api_hash: SecretStr = SecretStr("")
+    tg_bot_token: SecretStr = SecretStr("")
+    tg_chat_id: str = ""
 
     @model_validator(mode="after")
     def _live_requires_flag(self) -> Secrets:
@@ -84,7 +137,26 @@ class Config(BaseModel):
     costs: CostsConfig = Field(default_factory=CostsConfig)
     instruments: dict[str, InstrumentConfig] = Field(default_factory=dict)
     risk: RiskConfig = Field(default_factory=RiskConfig)
+    limits: LimitsConfig = Field(default_factory=LimitsConfig)
+    live_risk: LiveRiskConfig = Field(default_factory=LiveRiskConfig)
     secrets: Secrets
+
+    def for_live(self) -> Config:
+        """Копия настроек с профилем риска реального счёта (этап 8)."""
+        lr = self.live_risk
+        risk = self.risk.model_copy(
+            update={"risk_per_trade": lr.risk_per_trade, "max_leverage": lr.max_leverage}
+        )
+        limits = self.limits.model_copy(
+            update={
+                "max_positions": lr.max_positions,
+                "max_total_risk": lr.max_total_risk,
+                "daily_loss": lr.daily_loss,
+                "max_drawdown": lr.max_drawdown,
+                "daily_loss_halts": True,
+            }
+        )
+        return self.model_copy(update={"risk": risk, "limits": limits})
 
     def resolve(self, path: Path) -> Path:
         """Относительные пути из конфига считаются от корня проекта."""

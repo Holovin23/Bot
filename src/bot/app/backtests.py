@@ -55,7 +55,10 @@ def load_backtest(root: Path, backtest_id: str) -> dict[str, Any] | None:
     meta = _meta(root / backtest_id)
     if meta is None:
         return None
-    table = pd.read_csv(root / backtest_id / "trades.csv")
+    try:
+        table = pd.read_csv(root / backtest_id / "trades.csv")
+    except pd.errors.EmptyDataError:  # бэктест без сделок
+        table = pd.DataFrame()
     trades = []
     for number, row in enumerate(table.to_dict(orient="records"), start=1):
         trades.append(
@@ -76,3 +79,51 @@ def load_backtest(root: Path, backtest_id: str) -> dict[str, Any] | None:
             }
         )
     return {**meta, "trades": trades}
+
+
+def thin_equity(times: list[int], values: list[float], max_points: int) -> list[dict[str, Any]]:
+    """Не больше max_points точек: в каждом отрезке остаются минимум и максимум,
+    поэтому просадки и пики видны и после прореживания."""
+    n = len(times)
+    if n <= max_points:
+        return [{"time": t, "value": v} for t, v in zip(times, values, strict=True)]
+    buckets = max(1, max_points // 2)
+    keep: set[int] = {0, n - 1}
+    for b in range(buckets):
+        lo, hi = b * n // buckets, (b + 1) * n // buckets
+        if lo >= hi:
+            continue
+        chunk = values[lo:hi]
+        keep.add(lo + chunk.index(min(chunk)))
+        keep.add(lo + chunk.index(max(chunk)))
+    return [{"time": times[i], "value": values[i]} for i in sorted(keep)]
+
+
+def load_equity(
+    root: Path, backtest_id: str, max_points: int = 2000
+) -> list[dict[str, Any]] | None:
+    """Кривая капитала (время — секунды UTC); None — нет такого бэктеста; [] — нет файла."""
+    if FOLDER_RE.match(backtest_id) is None or _meta(root / backtest_id) is None:
+        return None
+    path = root / backtest_id / "equity.csv"
+    if not path.is_file():
+        return []
+    df = pd.read_csv(path)
+    if df.empty:
+        return []
+    times = [int(t.timestamp()) for t in pd.to_datetime(df["time"], utc=True)]
+    values = [round(float(v), 2) for v in df["equity"]]
+    return thin_equity(times, values, max_points)
+
+
+REPORT_FILES = ("report.md", "validation.md")
+
+
+def load_report(root: Path, backtest_id: str) -> str | None:
+    if FOLDER_RE.match(backtest_id) is None or _meta(root / backtest_id) is None:
+        return None
+    for name in REPORT_FILES:
+        path = root / backtest_id / name
+        if path.is_file():
+            return path.read_text(encoding="utf-8")
+    return ""

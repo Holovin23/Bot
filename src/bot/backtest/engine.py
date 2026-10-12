@@ -18,10 +18,12 @@ import pandas as pd
 
 from bot.backtest.costs import CostModel, entry_fill, exit_fill, funding_payment
 from bot.backtest.fills import ExitReason, check_exit
-from bot.core.config import InstrumentConfig, RiskConfig
+from bot.core.config import InstrumentConfig, LimitsConfig, RiskConfig
 from bot.core.models import Position, Side, Signal
 from bot.core.timeframes import timeframe_delta
 from bot.data.resample import resample_candles
+from bot.features.indicators import atr
+from bot.risk.limits import liquidation_ok, signal_checks
 from bot.risk.sizing import position_size
 from bot.strategies.base import MarketContext, Strategy, iter_contexts
 
@@ -137,9 +139,13 @@ def run_backtest(
     risk: RiskConfig,
     initial_capital: float = 10_000.0,
     funding: pd.DataFrame | None = None,
+    limits: LimitsConfig | None = None,
 ) -> BacktestResult:
+    """limits — проверки сигнала риск-менеджера (1–4, 12 из docs/05), те же, что у живого
+    бота. Без limits проверяется только размер позиции."""
     market = _Market(candles_1m, funding)
     bars = resample_candles(candles_1m, strategy.timeframe)
+    atr_values = atr(bars, 14).to_numpy() if limits is not None else None
     step = timeframe_delta(strategy.timeframe)
 
     cash = initial_capital
@@ -148,6 +154,7 @@ def run_backtest(
     equity_rows: list[tuple[pd.Timestamp, float, bool]] = []
     position: BacktestTrade | None = None
     pending_entry: Signal | None = None
+    pending_atr = float("nan")
     pending_exit: ExitReason | None = None
     f_ptr = 0
 
@@ -177,8 +184,15 @@ def run_backtest(
                 cash += amount
             f_ptr += 1
 
-    def try_enter(signal: Signal, k: int) -> None:
+    def try_enter(signal: Signal, k: int, atr_value: float) -> None:
         nonlocal cash, position, f_ptr
+        if limits is not None:
+            reasons = signal_checks(signal, atr_value, costs, limits)
+            if not liquidation_ok(signal.entry_price, signal.stop_loss, risk.max_leverage, limits):
+                reasons.append("4: стоп слишком близко к цене ликвидации")
+            if reasons:
+                skipped.append(SkippedSignal(signal.signal_id, "риск: " + "; ".join(reasons)))
+                return
         raw = float(market.open[k])
         fill = entry_fill(raw, signal.side, costs.slippage_rate(symbol))
         long = signal.side is Side.LONG
@@ -240,7 +254,7 @@ def run_backtest(
                     market.time(k_start), float(market.open[k_start]), pending_exit, False
                 )
             elif pending_entry is not None:
-                try_enter(pending_entry, k_start)
+                try_enter(pending_entry, k_start, pending_atr)
         elif pending_entry is not None:
             skipped.append(SkippedSignal(pending_entry.signal_id, "нет 1m-свечей для входа"))
         pending_entry = None
@@ -278,6 +292,7 @@ def run_backtest(
             signals = [s for s in strategy.on_bar(ctx) if s.symbol == symbol]
             if signals:
                 pending_entry = signals[0]
+                pending_atr = float(atr_values[i]) if atr_values is not None else float("nan")
                 for extra in signals[1:]:
                     skipped.append(SkippedSignal(extra.signal_id, "второй сигнал на той же свече"))
 

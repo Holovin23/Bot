@@ -42,6 +42,22 @@ class MarketContext:
         self._columns = columns if columns is not None else _numpy_columns(all_bars, all_features)
         self._bars: pd.DataFrame | None = None
         self._features: pd.DataFrame | None = None
+        self._prefix = ""
+
+    def view(self, prefix: str) -> MarketContext:
+        """Тот же момент времени, но признаки читаются с префиксом: value("atr")
+        вернёт колонку prefix + "atr", если она есть. Нужно составной стратегии, чтобы
+        у каждой входящей стратегии были свои признаки."""
+        other = MarketContext(
+            self.symbol,
+            self.timeframe,
+            self._all_bars,
+            self._all_features,
+            self.index,
+            self._columns,
+        )
+        other._prefix = prefix
+        return other
 
     @property
     def bars(self) -> pd.DataFrame:
@@ -61,6 +77,8 @@ class MarketContext:
             raise ValueError("Будущие свечи недоступны")
         if lag > self.index:
             return float("nan")
+        if self._prefix and self._prefix + column in self._columns:
+            column = self._prefix + column
         return float(self._columns[column][self.index - lag])
 
     @property

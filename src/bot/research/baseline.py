@@ -21,10 +21,11 @@ import pandas as pd
 from bot.backtest.costs import CostModel
 from bot.backtest.engine import BacktestResult, BacktestTrade, run_backtest
 from bot.backtest.metrics import compute_metrics
-from bot.core.config import InstrumentConfig, RiskConfig
+from bot.core.config import InstrumentConfig, LimitsConfig, RiskConfig
 from bot.core.timeframes import timeframe_delta
 from bot.data.resample import resample_candles
 from bot.features.indicators import atr
+from bot.risk.limits import min_rr_for
 from bot.strategies.random_entry import RandomEntry
 
 ATR_LENGTH = 14
@@ -105,12 +106,17 @@ def compare_with_random(
     risk: RiskConfig,
     funding: pd.DataFrame | None = None,
     runs: int = 50,
+    limits: LimitsConfig | None = None,
     progress: Callable[[int, int], None] | None = None,
 ) -> BaselineComparison | None:
     params = matched_random_params(result, candles_1m)
     if params is None:
         return None
     strategy_metrics = compute_metrics(result)
+    if limits is not None:
+        # Случайные входы проверяются тем же минимальным R:R, что и исходная стратегия
+        same_rr = {**limits.min_rr, "random_entry": min_rr_for(result.strategy, limits)}
+        limits = limits.model_copy(update={"min_rr": same_rr})
     pfs, exps = [], []
     for seed in range(1, runs + 1):
         random_result = run_backtest(
@@ -122,6 +128,7 @@ def compare_with_random(
             risk=risk,
             initial_capital=result.initial_capital,
             funding=funding,
+            limits=limits,
         )
         m = compute_metrics(random_result)
         if m.trades:

@@ -23,7 +23,7 @@ import yaml
 from bot.backtest.costs import CostModel
 from bot.backtest.engine import BacktestResult, BacktestTrade, run_backtest
 from bot.backtest.metrics import Metrics, compute_metrics
-from bot.core.config import RiskConfig, load_config
+from bot.core.config import Config, RiskConfig, load_config
 from bot.core.models import Side
 from bot.data.storage import Storage
 from bot.strategies.registry import create_strategy
@@ -222,6 +222,43 @@ def _parse_params(items: list[str] | None) -> dict[str, Any]:
     return params
 
 
+def run_report(
+    cfg: Config,
+    strategy_name: str,
+    symbol: str,
+    timeframe: str,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    params: dict[str, Any] | None = None,
+) -> tuple[Path, Metrics]:
+    """Бэктест на сохранённых данных и отчёт в data/backtests. Общий код для командной
+    строки и для запуска из веб-интерфейса."""
+    data_dir = cfg.resolve(cfg.data.dir)
+    storage = Storage(data_dir)
+    if symbol not in cfg.instruments:
+        raise ValueError(f"Нет параметров инструмента {symbol} в config/default.yaml")
+    candles = storage.read_candles(symbol, "1m", start, end)
+    if candles.empty:
+        raise ValueError(f"Нет 1m-свечей {symbol} за период. Сначала загрузите историю.")
+    funding = storage.read_funding(symbol, start, end)
+    strategy = create_strategy(strategy_name, timeframe, params)
+    costs = CostModel.from_config(cfg.costs)
+    result = run_backtest(
+        strategy,
+        symbol,
+        candles,
+        instrument=cfg.instruments[symbol],
+        costs=costs,
+        risk=cfg.risk,
+        initial_capital=cfg.costs.initial_capital,
+        funding=funding,
+        limits=cfg.limits,
+    )
+    metrics = compute_metrics(result, candles["close"])
+    ctx = ReportContext(start=start, end=end, costs=costs, risk=cfg.risk)
+    return save_report(result, metrics, ctx, data_dir / "backtests"), metrics
+
+
 def main(argv: list[str] | None = None) -> None:
     cfg = load_config()
     parser = argparse.ArgumentParser(description="Бэктест стратегии")
@@ -235,32 +272,13 @@ def main(argv: list[str] | None = None) -> None:
 
     start = pd.Timestamp(args.start, tz="UTC")
     end = pd.Timestamp(args.end, tz="UTC")
-    data_dir = cfg.resolve(cfg.data.dir)
-    storage = Storage(data_dir)
-    candles = storage.read_candles(args.symbol, "1m", start, end)
-    if candles.empty:
-        raise SystemExit(f"Нет 1m-свечей {args.symbol} за период. Сначала загрузите историю.")
-    funding = storage.read_funding(args.symbol, start, end)
-    if args.symbol not in cfg.instruments:
-        raise SystemExit(f"Нет параметров инструмента {args.symbol} в config/default.yaml")
-
-    strategy = create_strategy(args.strategy, args.timeframe, _parse_params(args.param))
-    costs = CostModel.from_config(cfg.costs)
-    print(f"Бэктест {strategy.name} {args.symbol} {args.timeframe}: {len(candles)} минутных свечей")
-    result = run_backtest(
-        strategy,
-        args.symbol,
-        candles,
-        instrument=cfg.instruments[args.symbol],
-        costs=costs,
-        risk=cfg.risk,
-        initial_capital=cfg.costs.initial_capital,
-        funding=funding,
-    )
-    closes = candles["close"]
-    metrics = compute_metrics(result, closes)
-    ctx = ReportContext(start=start, end=end, costs=costs, risk=cfg.risk)
-    folder = save_report(result, metrics, ctx, data_dir / "backtests")
+    print(f"Бэктест {args.strategy} {args.symbol} {args.timeframe}…", flush=True)
+    try:
+        folder, metrics = run_report(
+            cfg, args.strategy, args.symbol, args.timeframe, start, end, _parse_params(args.param)
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
     print(
         f"Сделок {metrics.trades}, PF {_f(metrics.profit_factor)}, "
         f"Expectancy {metrics.expectancy_r:.3f}R, доходность {_f(metrics.total_return_pct, 1)}%, "
