@@ -21,6 +21,8 @@
       margin-right: 4px; vertical-align: middle; background: var(--c); }
     #status { color: var(--muted); margin-left: auto; }
     #chart { flex: 1; min-height: 300px; }
+    #tradeinfo { padding: 4px 16px; color: var(--muted); min-height: 1.4em; }
+    #tradeinfo b { color: var(--fg); font-weight: 600; }
     footer { padding: 4px 16px; color: var(--muted); font-size: 12px;
       border-top: 1px solid var(--border); }
     footer a { color: inherit; }
@@ -30,6 +32,8 @@
   <header>
     <label>Символ <select id="symbol"></select></label>
     <label>Таймфрейм <select id="timeframe"></select></label>
+    <label>Бэктест <select id="backtest"><option value="">—</option></select></label>
+    <label>Сделка <select id="trade" disabled></select></label>
     <div class="legend">
       <span style="--c:#f5a623">EMA20</span>
       <span style="--c:#4a90e2">EMA50</span>
@@ -38,6 +42,7 @@
     </div>
     <div id="status"></div>
   </header>
+  <div id="tradeinfo"></div>
   <div id="chart"></div>
   <footer>
     Время — локальное. Графики:
@@ -71,10 +76,23 @@
     const symbolSel = document.getElementById("symbol");
     const tfSel = document.getElementById("timeframe");
 
-    async function load() {
+    const backtestSel = document.getElementById("backtest");
+    const tradeSel = document.getElementById("trade");
+    const info = document.getElementById("tradeinfo");
+    let backtest = null;      // выбранный бэктест со сделками
+    let priceLines = [];      // линии входа, стопа и тейка выбранной сделки
+    const TF_SECONDS = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400 };
+    const BARS_AFTER_EXIT = 60;  // сколько свечей показать после выхода
+
+    const fmt = (v) => v === null ? "—" : Number(v).toLocaleString(undefined,
+                                                                   { maximumFractionDigits: 4 });
+    const when = (t) => new Date(t * 1000).toLocaleString();
+
+    async function load(until = null) {
       status.textContent = "загрузка…";
       const params = new URLSearchParams({ symbol: symbolSel.value, timeframe: tfSel.value,
                                            limit: 1000 });
+      if (until !== null) params.set("until", until);
       const response = await fetch("/api/candles?" + params);
       if (!response.ok) { status.textContent = "ошибка " + response.status; return; }
       const data = await response.json();
@@ -85,10 +103,93 @@
         series.setData(rows.filter((r) => r[name] !== null)
                            .map((r) => ({ time: local(r.time), value: r[name] })));
       }
-      chart.timeScale().fitContent();
+      drawTrades(rows);
+      if (until === null) chart.timeScale().fitContent();
       status.textContent = rows.length
-        ? `${rows.length} свечей, последняя ${new Date(rows.at(-1).time * 1000).toLocaleString()}`
+        ? `${rows.length} свечей, последняя ${when(rows.at(-1).time)}`
         : "нет данных — сначала загрузите историю";
+    }
+
+    // Маркеры входов и выходов всех сделок бэктеста, попавших на загруженные свечи.
+    function drawTrades(rows) {
+      priceLines.forEach((l) => candles.removePriceLine(l));
+      priceLines = [];
+      const same = backtest && backtest.symbol === symbolSel.value;
+      if (!same || !rows.length) { candles.setMarkers([]); return; }
+      const step = TF_SECONDS[tfSel.value];
+      const first = rows[0].time, last = rows.at(-1).time + step;
+      const bar = (t) => local(Math.floor(t / step) * step);
+      const markers = [];
+      for (const t of backtest.trades) {
+        const long = t.side === "LONG";
+        const chosen = String(t.number) === tradeSel.value;
+        if (t.entry_time >= first && t.entry_time < last) {
+          markers.push({ time: bar(t.entry_time), position: long ? "belowBar" : "aboveBar",
+                         shape: long ? "arrowUp" : "arrowDown",
+                         color: long ? "#1a7f37" : "#cf222e",
+                         text: chosen ? `#${t.number} вход` : `#${t.number}` });
+        }
+        if (t.exit_time !== null && t.exit_time >= first && t.exit_time < last) {
+          markers.push({ time: bar(t.exit_time), position: long ? "aboveBar" : "belowBar",
+                         shape: "circle", color: t.r_multiple >= 0 ? "#1a7f37" : "#cf222e",
+                         text: `${t.exit_reason} ${t.r_multiple.toFixed(2)}R` });
+        }
+      }
+      markers.sort((a, b) => a.time - b.time);
+      candles.setMarkers(markers);
+
+      const t = selectedTrade();
+      if (!t) return;
+      const add = (price, color, title, style = 2) => {
+        if (price !== null) {
+          priceLines.push(candles.createPriceLine({ price, color, title, lineWidth: 1,
+                                                    lineStyle: style, axisLabelVisible: true }));
+        }
+      };
+      add(t.entry_price, "#4a90e2", "вход", 0);
+      add(t.initial_stop, "#cf222e", "стоп");
+      if (t.stop !== t.initial_stop) add(t.stop, "#fb8f44", "стоп (трейлинг)");
+      add(t.take, "#1a7f37", "тейк");
+    }
+
+    function selectedTrade() {
+      if (!backtest) return null;
+      return backtest.trades.find((t) => String(t.number) === tradeSel.value) || null;
+    }
+
+    function showTrade() {
+      const t = selectedTrade();
+      if (!t) { info.textContent = ""; load(); return; }
+      info.innerHTML = `<b>#${t.number} ${t.side}</b> вход ${when(t.entry_time)} по ` +
+        `${fmt(t.entry_price)}, стоп ${fmt(t.initial_stop)}, тейк ${fmt(t.take)}; ` +
+        `выход ${t.exit_time === null ? "—" : when(t.exit_time)} по ${fmt(t.exit_price)} ` +
+        `(${t.exit_reason}), <b>${t.r_multiple.toFixed(2)}R, ${fmt(t.net_pnl)} USDT</b>`;
+      const step = TF_SECONDS[tfSel.value];
+      load((t.exit_time ?? t.entry_time) + BARS_AFTER_EXIT * step).then(() => {
+        const from = local(t.entry_time) - 60 * step;
+        const to = local(t.exit_time ?? t.entry_time) + BARS_AFTER_EXIT * step;
+        chart.timeScale().setVisibleRange({ from, to });
+      });
+    }
+
+    async function chooseBacktest() {
+      backtest = null;
+      tradeSel.innerHTML = "";
+      tradeSel.disabled = true;
+      info.textContent = "";
+      if (!backtestSel.value) { load(); return; }
+      const response = await fetch("/api/backtests/" + encodeURIComponent(backtestSel.value));
+      if (!response.ok) { status.textContent = "ошибка " + response.status; return; }
+      backtest = await response.json();
+      symbolSel.value = backtest.symbol;
+      if (TF_SECONDS[backtest.timeframe]) tfSel.value = backtest.timeframe;
+      tradeSel.innerHTML = backtest.trades.map((t) =>
+        `<option value="${t.number}">#${t.number} ${new Date(t.entry_time * 1000)
+          .toLocaleDateString()} ${t.side} ${t.exit_reason} ${t.r_multiple.toFixed(2)}R</option>`
+      ).join("");
+      tradeSel.disabled = backtest.trades.length === 0;
+      if (backtest.trades.length) showTrade();
+      else { info.textContent = "в бэктесте нет сделок"; load(); }
     }
 
     (async () => {
@@ -96,7 +197,13 @@
       symbolSel.innerHTML = meta.symbols.map((s) => `<option>${s}</option>`).join("");
       tfSel.innerHTML = meta.timeframes.map((t) => `<option>${t}</option>`).join("");
       tfSel.value = "1h";
-      symbolSel.onchange = tfSel.onchange = load;
+      const list = (await (await fetch("/api/backtests")).json()).backtests;
+      backtestSel.innerHTML += list.map((b) =>
+        `<option value="${b.id}">${b.created} ${b.strategy} ${b.symbol} ${b.timeframe}</option>`
+      ).join("");
+      symbolSel.onchange = tfSel.onchange = () => (selectedTrade() ? showTrade() : load());
+      backtestSel.onchange = chooseBacktest;
+      tradeSel.onchange = showTrade;
       load();
     })();
   </script>
