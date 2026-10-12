@@ -241,6 +241,8 @@ def run_backtest(
                 )
             elif pending_entry is not None:
                 try_enter(pending_entry, k_start)
+        elif pending_entry is not None:
+            skipped.append(SkippedSignal(pending_entry.signal_id, "нет 1m-свечей для входа"))
         pending_entry = None
         pending_exit = None
 
