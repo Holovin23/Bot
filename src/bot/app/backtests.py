@@ -55,7 +55,10 @@ def load_backtest(root: Path, backtest_id: str) -> dict[str, Any] | None:
     meta = _meta(root / backtest_id)
     if meta is None:
         return None
-    table = pd.read_csv(root / backtest_id / "trades.csv")
+    try:
+        table = pd.read_csv(root / backtest_id / "trades.csv")
+    except pd.errors.EmptyDataError:  # бэктест без сделок
+        table = pd.DataFrame()
     trades = []
     for number, row in enumerate(table.to_dict(orient="records"), start=1):
         trades.append(

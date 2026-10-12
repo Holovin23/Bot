@@ -43,6 +43,9 @@
     .win { color: #1a7f37; } .loss { color: #cf222e; }
     #report { white-space: pre-wrap; font: 13px ui-monospace, monospace; margin: 0; }
     .hint { color: var(--muted); }
+    .row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 6px 0; }
+    .row input { font: inherit; width: 9em; }
+    .row input[type=date] { width: auto; }
     #tradeinfo { padding: 4px 16px; color: var(--muted); min-height: 1.4em; }
     #tradeinfo b { color: var(--fg); font-weight: 600; }
     footer { padding: 4px 16px; color: var(--muted); font-size: 12px;
@@ -71,10 +74,27 @@
       <button data-tab="trades" class="active">Сделки</button>
       <button data-tab="equity">Капитал</button>
       <button data-tab="report">Отчёт</button>
+      <button data-tab="run">Запуск</button>
     </div>
     <div id="tab-trades" class="tab active"><p class="hint">Выберите бэктест.</p></div>
     <div id="tab-equity" class="tab"><div id="equity"></div></div>
     <div id="tab-report" class="tab"><pre id="report" class="hint">Выберите бэктест.</pre></div>
+    <div id="tab-run" class="tab">
+      <form id="runform">
+        <div class="row">
+          <label>Стратегия <select id="r-strategy"></select></label>
+          <label>Символ <select id="r-symbol"></select></label>
+          <label>Таймфрейм <select id="r-timeframe"></select></label>
+          <label>С <input id="r-start" type="date" value="2021-01-01"></label>
+          <label>по <input id="r-end" type="date" value="2024-06-30"></label>
+          <button type="submit">Запустить</button>
+          <span id="r-status" class="hint"></span>
+        </div>
+        <div id="r-params" class="row"></div>
+        <p class="hint">Бэктест на in-sample. Validation и hold-out проверяются командой
+          <code>bot.research.validate</code>, а не отсюда.</p>
+      </form>
+    </div>
   </div>
   <footer>
     Время — локальное. Графики:
@@ -292,15 +312,75 @@
       else { info.textContent = "в бэктесте нет сделок"; load(); }
     }
 
+    // Запуск бэктеста из интерфейса
+    let catalog = [];
+    const rStrategy = document.getElementById("r-strategy");
+    const rStatus = document.getElementById("r-status");
+
+    function renderParams() {
+      const strategy = catalog.find((c) => c.name === rStrategy.value);
+      document.getElementById("r-params").innerHTML = Object.entries(strategy.params).map(
+        ([k, v]) => `<label>${k} <input name="${k}" value="${v}"></label>`).join("");
+    }
+
+    function parseValue(text) {
+      if (text === "true" || text === "false") return text === "true";
+      if (text === "null" || text === "") return null;
+      const n = Number(text);
+      return Number.isNaN(n) ? text : n;
+    }
+
+    async function refreshBacktests(selectId = null) {
+      const list = (await (await fetch("/api/backtests")).json()).backtests;
+      backtestSel.innerHTML = `<option value="">—</option>` + list.map((b) =>
+        `<option value="${b.id}">${b.created} ${b.strategy} ${b.symbol} ${b.timeframe}</option>`
+      ).join("");
+      if (selectId) { backtestSel.value = selectId; chooseBacktest(); }
+    }
+
+    document.getElementById("runform").onsubmit = async (event) => {
+      event.preventDefault();
+      const params = {};
+      document.querySelectorAll("#r-params input").forEach((i) => params[i.name] = parseValue(i.value));
+      const body = { strategy: rStrategy.value, symbol: document.getElementById("r-symbol").value,
+                     timeframe: document.getElementById("r-timeframe").value,
+                     start: document.getElementById("r-start").value,
+                     end: document.getElementById("r-end").value, params };
+      const response = await fetch("/api/backtests/run", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const data = await response.json();
+      if (!response.ok) { rStatus.textContent = "ошибка: " + data.detail; return; }
+      rStatus.textContent = "идёт бэктест…";
+      const started = Date.now();
+      const timer = setInterval(async () => {
+        const job = await (await fetch("/api/jobs/" + data.job_id)).json();
+        if (job.status === "running") {
+          rStatus.textContent = `идёт бэктест… ${Math.round((Date.now() - started) / 1000)} с`;
+          return;
+        }
+        clearInterval(timer);
+        if (job.status === "error") { rStatus.textContent = "ошибка: " + job.error; return; }
+        rStatus.textContent = "готово";
+        await refreshBacktests(job.backtest_id);
+      }, 1000);
+    };
+
     (async () => {
       const meta = await (await fetch("/api/symbols")).json();
       symbolSel.innerHTML = meta.symbols.map((s) => `<option>${s}</option>`).join("");
       tfSel.innerHTML = meta.timeframes.map((t) => `<option>${t}</option>`).join("");
       tfSel.value = "1h";
-      const list = (await (await fetch("/api/backtests")).json()).backtests;
-      backtestSel.innerHTML += list.map((b) =>
-        `<option value="${b.id}">${b.created} ${b.strategy} ${b.symbol} ${b.timeframe}</option>`
-      ).join("");
+      await refreshBacktests();
+      const strategies = await (await fetch("/api/strategies")).json();
+      catalog = strategies.strategies.filter((c) => c.name !== "random_entry")
+        .concat(strategies.strategies.filter((c) => c.name === "random_entry"));
+      rStrategy.innerHTML = catalog.map((c) => `<option>${c.name}</option>`).join("");
+      document.getElementById("r-symbol").innerHTML =
+        strategies.symbols.map((x) => `<option>${x}</option>`).join("");
+      document.getElementById("r-timeframe").innerHTML = strategies.timeframes
+        .map((x) => `<option${x === "1h" ? " selected" : ""}>${x}</option>`).join("");
+      rStrategy.onchange = renderParams;
+      renderParams();
       symbolSel.onchange = tfSel.onchange = () => (selectedTrade() ? showTrade() : load());
       backtestSel.onchange = chooseBacktest;
       tradeSel.onchange = showTrade;

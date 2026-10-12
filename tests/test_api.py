@@ -149,3 +149,72 @@ def test_equity_and_report(tmp_path: Path) -> None:
     }
     assert client.get(f"/api/backtests/{name}/report").json()["report"] == "# Бэктест"
     assert client.get("/api/backtests/20261012-000000_x_BTCUSDT_1h/equity").status_code == 404
+
+
+def test_strategies_and_run_job(tmp_path: Path) -> None:
+    import time
+
+    calls = []
+
+    def fake_run(strategy, symbol, timeframe, start, end, params):  # type: ignore[no-untyped-def]
+        calls.append((strategy, symbol, timeframe, start, end, params))
+        return "20261012-120000_breakout_BTCUSDT_1h"
+
+    storage = Storage(tmp_path)
+    client = TestClient(create_app(storage, ["BTCUSDT"], run=fake_run))
+    catalog = client.get("/api/strategies").json()["strategies"]
+    names = [s["name"] for s in catalog]
+    assert "mean_reversion" in names
+    mr = next(s for s in catalog if s["name"] == "mean_reversion")
+    assert mr["params"]["adx_max"] == 20.0
+
+    body = {"strategy": "breakout", "symbol": "BTCUSDT", "params": {"take_r": 3}}
+    job_id = client.post("/api/backtests/run", json=body).json()["job_id"]
+    for _ in range(50):
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] != "running":
+            break
+        time.sleep(0.02)
+    assert job == {
+        "status": "done",
+        "backtest_id": "20261012-120000_breakout_BTCUSDT_1h",
+        "error": None,
+    }
+    assert calls == [("breakout", "BTCUSDT", "1h", "2021-01-01", "2024-06-30", {"take_r": 3})]
+
+    bad = {"strategy": "breakout", "symbol": "BTCUSDT", "end": "2025-08-01"}
+    assert client.post("/api/backtests/run", json=bad).status_code == 400  # hold-out
+    assert (
+        client.post("/api/backtests/run", json={"strategy": "x", "symbol": "BTCUSDT"}).status_code
+        == 400
+    )
+
+
+def test_job_runner_reports_errors() -> None:
+    from bot.app.jobs import JobRunner
+
+    def boom(*_args):  # type: ignore[no-untyped-def]
+        raise ValueError("Нет 1m-свечей")
+
+    runner = JobRunner(boom)
+    request = {
+        "strategy": "s",
+        "symbol": "X",
+        "timeframe": "1h",
+        "start": "",
+        "end": "",
+        "params": {},
+    }
+    job = runner.start(request, wait=True)
+    assert job.status == "error"
+    assert job.error == "Нет 1m-свечей"
+    assert not runner.busy()
+
+
+def test_backtest_without_trades(tmp_path: Path) -> None:
+    client = make_client(tmp_path)
+    folder = tmp_path / "backtests" / "20261012-100000_breakout_BTCUSDT_1h"
+    folder.mkdir(parents=True)
+    (folder / "trades.csv").write_text("\n", encoding="utf-8")
+    data = client.get("/api/backtests/20261012-100000_breakout_BTCUSDT_1h").json()
+    assert data["trades"] == []

@@ -16,13 +16,19 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from bot.app.backtests import list_backtests, load_backtest, load_equity, load_report
+from bot.app.jobs import JobRunner, RunFn
+from bot.backtest.report import run_report
 from bot.core.config import load_config
 from bot.core.timeframes import timeframe_minutes
 from bot.data.resample import resample_candles
 from bot.data.storage import Storage
 from bot.features.indicators import bollinger, ema
+from bot.research.experiment import IN_SAMPLE_END, IN_SAMPLE_START
+from bot.research.periods import HOLDOUT
+from bot.strategies.registry import STRATEGIES
 
 STATIC_DIR = Path(__file__).parent / "static"
 TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h"]
@@ -69,9 +75,32 @@ def build_chart_data(
     return {"symbol": symbol, "timeframe": timeframe, "candles": candles}
 
 
-def create_app(storage: Storage, symbols: list[str], backtests_dir: Path | None = None) -> FastAPI:
+class RunRequest(BaseModel):
+    strategy: str
+    symbol: str
+    timeframe: str = "1h"
+    start: str = IN_SAMPLE_START
+    end: str = IN_SAMPLE_END
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+def strategy_catalog() -> list[dict[str, Any]]:
+    """Стратегии и их параметры по умолчанию (для формы запуска)."""
+    return [
+        {"name": name, "version": cls.version, "params": cls("1h").params}
+        for name, cls in sorted(STRATEGIES.items())
+    ]
+
+
+def create_app(
+    storage: Storage,
+    symbols: list[str],
+    backtests_dir: Path | None = None,
+    run: RunFn | None = None,
+) -> FastAPI:
     app = FastAPI(title="Bot")
     backtests_root = backtests_dir if backtests_dir is not None else storage.root / "backtests"
+    jobs = JobRunner(run) if run is not None else None
 
     @app.get("/")
     def index() -> FileResponse:
@@ -119,6 +148,35 @@ def create_app(storage: Storage, symbols: list[str], backtests_dir: Path | None 
             raise HTTPException(404, f"Нет бэктеста {backtest_id}")
         return {"report": text}
 
+    @app.get("/api/strategies")
+    def get_strategies() -> dict[str, Any]:
+        return {"strategies": strategy_catalog(), "symbols": symbols, "timeframes": TIMEFRAMES}
+
+    @app.post("/api/backtests/run")
+    def run_backtest_job(request: RunRequest) -> dict[str, Any]:
+        if jobs is None:
+            raise HTTPException(503, "Запуск бэктестов не настроен")
+        if request.strategy not in STRATEGIES:
+            raise HTTPException(400, f"Неизвестная стратегия {request.strategy}")
+        if request.symbol not in symbols:
+            raise HTTPException(400, f"Неизвестный символ {request.symbol}")
+        if request.timeframe not in TIMEFRAMES:
+            raise HTTPException(400, f"Таймфрейм должен быть одним из {TIMEFRAMES}")
+        if pd.Timestamp(request.end, tz="UTC") >= HOLDOUT.start:
+            raise HTTPException(400, "Период заходит в hold-out: используйте bot.research.validate")
+        try:
+            job = jobs.start(request.model_dump(), wait=False)
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from None
+        return {"job_id": job.job_id}
+
+    @app.get("/api/jobs/{job_id}")
+    def get_job(job_id: str) -> dict[str, Any]:
+        job = jobs.get(job_id) if jobs is not None else None
+        if job is None:
+            raise HTTPException(404, "Нет такого запуска")
+        return {"status": job.status, "backtest_id": job.backtest_id, "error": job.error}
+
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app
 
@@ -127,7 +185,22 @@ def main() -> None:
     import uvicorn
 
     cfg = load_config()
-    app = create_app(Storage(cfg.resolve(cfg.data.dir)), cfg.data.symbols)
+
+    def run(
+        strategy: str, symbol: str, timeframe: str, start: str, end: str, params: dict[str, Any]
+    ) -> str:
+        folder, _ = run_report(
+            cfg,
+            strategy,
+            symbol,
+            timeframe,
+            pd.Timestamp(start, tz="UTC"),
+            pd.Timestamp(end, tz="UTC") + pd.Timedelta(days=1),
+            params,
+        )
+        return folder.name
+
+    app = create_app(Storage(cfg.resolve(cfg.data.dir)), cfg.data.symbols, run=run)
     print(f"Откройте http://{cfg.app.host}:{cfg.app.port}  (остановить: Ctrl+C)")
     uvicorn.run(app, host=cfg.app.host, port=cfg.app.port)
 
