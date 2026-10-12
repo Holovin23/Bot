@@ -21,6 +21,7 @@ from bot.backtest.engine import BacktestTrade, run_backtest
 from bot.core.config import Config
 from bot.research.grid import run_grid
 from bot.research.robustness import TradeStats, plateau_scores, trade_stats
+from bot.strategies.base import Strategy
 from bot.strategies.registry import create_strategy
 
 WARMUP = pd.Timedelta(days=30)
@@ -72,9 +73,22 @@ def backtest_window(
     """Сделки с сигналом внутри [start, end). Бэктест начинается на WARMUP раньше,
     чтобы индикаторы успели посчитаться; сделка, не закрытая к end, закрывается по
     последней цене окна (end_of_data)."""
+    strategy = create_strategy(strategy_name, timeframe, params)
+    return strategy_window(strategy, symbol, candles_1m, cfg, start, end, funding)
+
+
+def strategy_window(
+    strategy: Strategy,
+    symbol: str,
+    candles_1m: pd.DataFrame,
+    cfg: Config,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    funding: pd.DataFrame | None = None,
+) -> list[BacktestTrade]:
+    """То же, что backtest_window, для готового объекта стратегии (например, с фильтром)."""
     candles = _slice(candles_1m, "open_time", start - WARMUP, end)
     fund = None if funding is None else _slice(funding, "time", start - WARMUP, end)
-    strategy = create_strategy(strategy_name, timeframe, params)
     result = run_backtest(
         strategy,
         symbol,

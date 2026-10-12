@@ -144,6 +144,19 @@ class FilterModel:
         return model
 
 
+def cross_calibrate(probs: NDArray[np.float64], labels: NDArray[Any]) -> NDArray[np.float64]:
+    """Калибровка каждой половины (по времени) калибратором, обученным на другой."""
+    n = len(probs)
+    half = n // 2
+    out = np.array(probs, dtype="float64")
+    if half < 10:
+        return out
+    first, second = slice(0, half), slice(half, n)
+    out[second] = IsotonicCalibrator().fit(probs[first], labels[first]).transform(probs[second])
+    out[first] = IsotonicCalibrator().fit(probs[second], labels[second]).transform(probs[first])
+    return out
+
+
 def _auc(labels: NDArray[Any], probs: NDArray[np.float64]) -> float:
     if len(np.unique(labels)) < 2:
         return float("nan")
@@ -156,8 +169,10 @@ def train_filter(data: pd.DataFrame, kind: ModelKind, n_splits: int = 5) -> Filt
     y = data["label"].to_numpy()
     r = data["r_multiple"].to_numpy(dtype="float64")
     oof = oof_predictions(data, kind, n_splits)
-    calibrator = IsotonicCalibrator().fit(oof, y)
-    calibrated = calibrator.transform(oof)
+    # Оценка калибровки «перекрёстно»: калибратор, обученный на одной половине OOF,
+    # применяется к другой. Иначе таблица надёжности была бы идеальной по построению.
+    calibrated = cross_calibrate(oof, y)
+    calibrator = IsotonicCalibrator().fit(oof, y)  # для работы — по всем данным
     threshold = choose_threshold(calibrated, r)
     model = make_model(kind)
     model.fit(data[FEATURE_COLUMNS], y)
