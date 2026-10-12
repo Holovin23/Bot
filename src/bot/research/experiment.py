@@ -32,7 +32,7 @@ from bot.research.baseline import BaselineComparison, compare_with_random
 from bot.research.grid import count_variants, grid_summary, parse_grid, render_grid, run_grid
 from bot.research.journal import JournalEntry, append_entry
 from bot.strategies.base import Strategy
-from bot.strategies.registry import create_strategy
+from bot.strategies.registry import STRATEGIES, create_strategy
 
 IN_SAMPLE_START = "2021-01-01"
 IN_SAMPLE_END = "2024-06-30"  # включительно
@@ -62,6 +62,11 @@ HYPOTHESES: dict[str, tuple[str, str]] = {
         "в боковике (ADX < 20) закрытие за нижней полосой BB(20, 2) при RSI < 30 "
         "возвращается к средней линии в течение 24 свечей",
         "краткосрочные перекосы ликвидности и ликвидации без смены режима",
+    ),
+    "composite": (
+        "выбор стратегии по режиму рынка (MR в боковике, TF в тренде) лучше, чем те же "
+        "стратегии без учёта режима",
+        "каждая стратегия работает в своих условиях и теряет в чужих",
     ),
     "breakout": (
         "после сжатия (ширина BB в нижних 10% за 100 свечей) пробой максимума 20 свечей "
@@ -318,7 +323,7 @@ def _run_one(
 def main(argv: list[str] | None = None) -> None:
     cfg = load_config()
     parser = argparse.ArgumentParser(description="Эксперимент на in-sample")
-    parser.add_argument("--strategy", choices=ALL_STRATEGIES)
+    parser.add_argument("--strategy", choices=sorted(STRATEGIES))
     parser.add_argument("--symbol")
     parser.add_argument("--timeframe", default="1h")
     parser.add_argument("--all", action="store_true", help="3 стратегии × 3 ТФ × все символы")
