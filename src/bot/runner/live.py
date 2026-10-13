@@ -71,6 +71,12 @@ class Running:
 
 def build_strategy(instance: Instance, models_dir: Path) -> Strategy:
     strategy: Strategy = create_strategy(instance.strategy, instance.timeframe, instance.params)
+    only_backtest: list[str] = getattr(strategy, "backtest_only", list)()
+    if only_backtest:
+        raise ValueError(
+            f"{instance.strategy}: {', '.join(only_backtest)} пока есть только в бэктесте — "
+            "живой бот с этими настройками не запускается"
+        )
     if instance.ml_filter:
         from bot.analyzer.filtered import FilteredStrategy
         from bot.analyzer.ml_filter import FilterModel

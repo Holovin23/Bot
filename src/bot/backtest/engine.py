@@ -3,6 +3,10 @@
 Порядок на каждой свече таймфрейма стратегии (правила — docs/tasks/stage-2.md):
 1. На открытии свечи: исполнить отложенный выход (по времени) или вход по сигналу
    прошлой свечи — рыночным ордером по open первой 1m-свечи, с проскальзыванием.
+   Лимитный вход (Signal.entry_type = LIMIT) ждёт свою цену в течение этой свечи:
+   исполняется по лимитной цене с комиссией maker, когда 1m-цена прошла её насквозь;
+   если свеча открылась уже лучше лимита — сразу, как рыночный (taker), но не хуже
+   лимита; не дождался — отменяется.
 2. Внутри свечи по 1m: funding в моменты выплат, затем проверка стопа и тейка.
 3. На закрытии свечи: отметка капитала; для открытой позиции — счётчик свечей,
    выход по времени, трейлинг-стоп; без позиции — вызов стратегии.
@@ -19,9 +23,9 @@ import pandas as pd
 from bot.backtest.costs import CostModel, entry_fill, exit_fill, funding_payment
 from bot.backtest.fills import ExitReason, check_exit
 from bot.core.config import InstrumentConfig, LimitsConfig, RiskConfig
-from bot.core.models import Position, Side, Signal
+from bot.core.models import EntryType, Position, Side, Signal
 from bot.core.timeframes import timeframe_delta
-from bot.data.resample import resample_candles
+from bot.data.resample import resample_candles, with_funding_rate
 from bot.features.indicators import atr
 from bot.risk.limits import liquidation_ok, signal_checks
 from bot.risk.sizing import position_size
@@ -150,7 +154,10 @@ def run_backtest(
     """limits — проверки сигнала риск-менеджера (1–4, 12 из docs/05), те же, что у живого
     бота. Без limits проверяется только размер позиции."""
     market = _Market(candles_1m, funding)
-    bars = resample_candles(candles_1m, strategy.timeframe)
+    # funding_rate — для стратегий с фильтром по funding (ставка, известная на закрытии)
+    bars = with_funding_rate(
+        resample_candles(candles_1m, strategy.timeframe), funding, strategy.timeframe
+    )
     atr_values = atr(bars, 14).to_numpy() if limits is not None else None
     step = timeframe_delta(strategy.timeframe)
 
@@ -190,7 +197,26 @@ def run_backtest(
                 cash += amount
             f_ptr += 1
 
-    def try_enter(signal: Signal, k: int, atr_value: float) -> None:
+    def entry_at(signal: Signal, k_start: int, k_end: int) -> tuple[int, float, float, bool] | None:
+        """(минута входа, цена до проскальзывания, цена исполнения, maker) или None."""
+        rate = costs.slippage_rate(symbol)
+        raw = float(market.open[k_start])
+        if signal.entry_type is not EntryType.LIMIT:
+            return k_start, raw, entry_fill(raw, signal.side, rate), False
+        limit = signal.entry_price
+        long = signal.side is Side.LONG
+        if (raw <= limit) if long else (raw >= limit):
+            fill = entry_fill(raw, signal.side, rate)
+            return k_start, raw, (min(fill, limit) if long else max(fill, limit)), False
+        for k in range(k_start, k_end):
+            # Ордер в очереди стакана: считаем исполненным, только когда цена прошла
+            # лимит насквозь, а не просто коснулась его.
+            if (market.low[k] < limit) if long else (market.high[k] > limit):
+                return k, limit, limit, True
+        return None
+
+    def try_enter(signal: Signal, k_start: int, k_end: int, atr_value: float) -> int | None:
+        """Вход по сигналу; возвращает минуту входа или None."""
         nonlocal cash, position, f_ptr
         if limits is not None:
             reasons = signal_checks(signal, atr_value, costs, limits)
@@ -200,9 +226,14 @@ def run_backtest(
                 skipped.append(
                     SkippedSignal(signal.signal_id, "риск: " + "; ".join(reasons), signal)
                 )
-                return
-        raw = float(market.open[k])
-        fill = entry_fill(raw, signal.side, costs.slippage_rate(symbol))
+                return None
+        entry = entry_at(signal, k_start, k_end)
+        if entry is None:
+            skipped.append(
+                SkippedSignal(signal.signal_id, "лимитный ордер не исполнился за свечу", signal)
+            )
+            return None
+        k, raw, fill, maker = entry
         long = signal.side is Side.LONG
         beyond_stop = fill <= signal.stop_loss if long else fill >= signal.stop_loss
         tp = signal.take_profit
@@ -211,7 +242,7 @@ def run_backtest(
             skipped.append(
                 SkippedSignal(signal.signal_id, "цена входа уже за стопом или тейком", signal)
             )
-            return
+            return None
         size = position_size(
             equity=cash,
             risk_fraction=risk.risk_per_trade,
@@ -224,9 +255,9 @@ def run_backtest(
         )
         if size.qty <= 0:
             skipped.append(SkippedSignal(signal.signal_id, size.reason, signal))
-            return
+            return None
         entry_time = market.time(k)
-        fee = costs.fee(size.qty * fill)
+        fee = costs.fee(size.qty * fill, maker=maker)
         cash -= fee
         position = BacktestTrade(
             signal_id=signal.signal_id,
@@ -250,6 +281,7 @@ def run_backtest(
         # Выплата ровно в момент входа позицию не затрагивает.
         while f_ptr < len(market.f_times) and market.f_times[f_ptr] <= market.times[k]:
             f_ptr += 1
+        return k
 
     bar_opens = bars["open_time"].to_numpy(dtype="datetime64[ns]")
     starts = np.searchsorted(market.times, bar_opens)
@@ -260,6 +292,7 @@ def run_backtest(
         k_start, k_end = int(starts[i]), int(ends[i])
 
         # 1. Открытие свечи: отложенный выход или вход.
+        exit_from, maker_minute = k_start, -1
         if k_start < k_end:
             if pending_exit is not None and position is not None:
                 apply_funding_until(k_start)
@@ -267,7 +300,11 @@ def run_backtest(
                     market.time(k_start), float(market.open[k_start]), pending_exit, False
                 )
             elif pending_entry is not None:
-                try_enter(pending_entry, k_start, pending_atr)
+                entered = try_enter(pending_entry, k_start, k_end, pending_atr)
+                if entered is not None:
+                    exit_from = entered
+                    if pending_entry.entry_type is EntryType.LIMIT:
+                        maker_minute = entered
         elif pending_entry is not None:
             skipped.append(
                 SkippedSignal(pending_entry.signal_id, "нет 1m-свечей для входа", pending_entry)
@@ -277,12 +314,14 @@ def run_backtest(
 
         # 2. Внутри свечи: funding, стоп и тейк по 1m.
         if position is not None:
-            for k in range(k_start, k_end):
+            for k in range(exit_from, k_end):
                 apply_funding_until(k)
+                # В минуту лимитного входа порядок цен неизвестен: тейк не засчитываем,
+                # стоп — засчитываем (хуже для результата).
                 hit = check_exit(
                     position.side,
                     position.stop,
-                    position.take,
+                    None if k == maker_minute else position.take,
                     float(market.open[k]),
                     float(market.high[k]),
                     float(market.low[k]),
