@@ -17,7 +17,7 @@ from typing import Any, Protocol
 
 import pandas as pd
 import requests
-from pybit.exceptions import FailedRequestError
+from pybit.exceptions import FailedRequestError, InvalidRequestError
 
 from bot.core.config import load_config
 from bot.core.logging import get_logger, setup_logging
@@ -37,6 +37,10 @@ OI_INTERVALS = {"5min": 5, "15min": 15, "30min": 30, "1h": 60, "4h": 240}
 MIN_REQUEST_INTERVAL_S = 0.1
 MAX_ATTEMPTS = 6
 IP_BAN_PAUSE_S = 600  # при HTTP 403 Bybit просит подождать не меньше 10 минут
+# Временные ошибки Bybit (retCode при HTTP 200): повторяем с паузой, как сетевые.
+# 10000 — таймаут сервера, 10006/10018/10429 — превышен лимит запросов,
+# 10016 — внутренняя ошибка или перезапуск сервиса.
+TRANSIENT_RET_CODES = frozenset({10000, 10006, 10016, 10018, 10429})
 
 
 class MarketClient(Protocol):
@@ -54,7 +58,7 @@ def from_ms(ms: int) -> pd.Timestamp:
 
 
 class RestCaller:
-    """Вызов REST с паузой между запросами и повторами при сетевых ошибках."""
+    """Вызов REST с паузой между запросами и повторами при сетевых и временных ошибках."""
 
     def __init__(
         self,
@@ -77,8 +81,11 @@ class RestCaller:
             self._last_call = self.clock()
             try:
                 return fn(**kwargs)
-            except (FailedRequestError, requests.RequestException) as error:
-                if attempt == self.max_attempts:
+            except (FailedRequestError, InvalidRequestError, requests.RequestException) as error:
+                transient = not isinstance(error, InvalidRequestError) or (
+                    error.status_code in TRANSIENT_RET_CODES
+                )
+                if not transient or attempt == self.max_attempts:
                     raise
                 status = getattr(error, "status_code", None)
                 pause = IP_BAN_PAUSE_S if status == 403 else min(2.0**attempt, 60.0)
