@@ -15,6 +15,7 @@
 | 7 | [07-open-questions.md](07-open-questions.md) | Вопросы, ответы и решения по умолчанию |
 | 8 | [08-ai-assisted-development.md](08-ai-assisted-development.md) | Как вести разработку с ИИ-ассистентом, если вы новичок |
 | 9 | [09-start-checklist.md](09-start-checklist.md) | Готовность к старту, конкретные значения, что нужно от вас |
+| 10 | [10-telegram-scenarios-plan.md](10-telegram-scenarios-plan.md) | Сценарии из Telegram-канала → ячейки → сделки: план, решения, команды |
 | — | [tasks/stage-0-1.md](tasks/stage-0-1.md) | Готовые задачи этапов 0 и 1 для Claude Code |
 | — | [tasks/stage-0-1-verify.md](tasks/stage-0-1-verify.md) | Как проверить этапы 0 и 1 на своём компьютере: команды по шагам |
 | — | [tasks/stage-2.md](tasks/stage-2.md) | Задачи этапа 2: бэктест-движок |

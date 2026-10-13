@@ -37,6 +37,7 @@ from bot.app.charts import (  # chart_bars — для совместимости
 from bot.app.commands import CommandRunner, catalog
 from bot.app.jobs import Job, JobRunner, RunFn
 from bot.app.refresh import CandleRefresher
+from bot.app.scenarios import MEDIA_RE, cells, posts_feed
 from bot.app.symbols import SymbolBook, coverage
 from bot.core.db import connect, db_path
 from bot.core.journal import read_journal
@@ -45,6 +46,7 @@ from bot.data.storage import Storage
 from bot.research.experiment import IN_SAMPLE_END, IN_SAMPLE_START
 from bot.research.periods import HOLDOUT, touches_holdout
 from bot.runner.host import BotHost
+from bot.scenarios.store import approve
 from bot.strategies.registry import STRATEGIES, create_strategy
 
 __all__ = ["chart_bars", "create_app", "main"]
@@ -64,6 +66,8 @@ BACKTEST_FILES = {
 JOURNAL_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,120}\.jsonl$")
 
 DownloaderFactory = Callable[[Callable[[str], None]], Downloader]
+# Бэктест поста из вкладки «Сценарии»: запрос и вывод в журнал задачи → итог одной строкой
+PostBacktest = Callable[[dict[str, Any], Callable[[str], None]], str]
 
 
 class RunRequest(BaseModel):
@@ -101,6 +105,17 @@ class BotRequest(BaseModel):
 
 class CommandRequest(BaseModel):
     values: dict[str, Any] = Field(default_factory=dict)
+
+
+class PostBacktestRequest(BaseModel):
+    text: str = Field(min_length=1)
+    date: str  # время публикации, UTC
+    # Готовый ответ разбора (план Б). Пусто — разбор через Claude API (план А).
+    answer_json: str = ""
+    post_id: int | None = None  # пост из ленты: взять его картинки для Claude API
+    days: float = Field(default=30, gt=0, le=365)
+    timeframe: str = "1h"
+    allow_image_levels: bool = False
 
 
 def parse_period(start: str, end: str | None) -> tuple[pd.Timestamp, pd.Timestamp]:
@@ -193,6 +208,7 @@ def create_app(
     jobs: JobRunner | None = None,
     commands: CommandRunner | None = None,
     journal_dir: Path | None = None,
+    post_backtest: PostBacktest | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Bot")
     backtests_root = backtests_dir if backtests_dir is not None else storage.root / "backtests"
@@ -462,6 +478,60 @@ def create_app(
     def get_telegram(limit: int = Query(default=50, ge=1, le=500)) -> dict[str, Any]:
         return {"posts": telegram_feed(storage.root, limit)}
 
+    # --- сценарии из Telegram-канала (docs/10) -----------------------------------------
+
+    @app.get("/api/scenarios")
+    def get_scenarios(
+        limit: int = Query(default=50, ge=1, le=500), cancelled: bool = False
+    ) -> dict[str, Any]:
+        return {
+            "cells": cells(storage.root, cancelled),
+            "posts": posts_feed(storage.root, limit),
+        }
+
+    @app.post("/api/scenarios/backtest")
+    def run_post_backtest(request: PostBacktestRequest) -> dict[str, Any]:
+        if post_backtest is None:
+            raise HTTPException(503, "Бэктест поста не настроен")
+        check_timeframe(request.timeframe)
+        try:
+            pd.Timestamp(request.date)
+        except ValueError:
+            raise HTTPException(400, "Дата: формат 2025-03-01 10:00") from None
+        if request.answer_json.strip():
+            try:
+                json.loads(request.answer_json)
+            except ValueError:
+                raise HTTPException(400, "Ответ разбора — не JSON") from None
+        body = request.model_dump()
+        title = f"Бэктест поста {request.date}, {request.days:g} дн., {request.timeframe}"
+        try:
+            job = jobs.start("post_backtest", title, lambda job: post_backtest(body, job.say), body)
+        except RuntimeError:
+            raise HTTPException(409, "Уже идёт бэктест поста — дождитесь окончания") from None
+        return {"job_id": job.job_id}
+
+    @app.post("/api/scenarios/{scenario_id}/approve")
+    def approve_cell(scenario_id: str) -> dict[str, str]:
+        path = db_path(storage.root)
+        if not path.exists():
+            raise HTTPException(404, "Нет такой ячейки")
+        conn = connect(path)
+        try:
+            if not approve(conn, scenario_id):
+                raise HTTPException(404, "Нет такой ячейки")
+        finally:
+            conn.close()
+        return {"status": "approved"}
+
+    @app.get("/api/telegram/media/{channel}/{name}")
+    def get_media(channel: str, name: str) -> FileResponse:
+        rel = f"telegram/media/{channel}/{name}"
+        path = storage.root / rel
+        if MEDIA_RE.match(rel) is None or ".." in name or not path.is_file():
+            raise HTTPException(404, "Нет такой картинки")
+        return FileResponse(path)
+
     @app.get("/api/strategies")
     def get_strategies() -> dict[str, Any]:
         return {"strategies": strategy_catalog(), "symbols": symbols, "timeframes": TIMEFRAMES}
@@ -609,6 +679,44 @@ def main() -> None:
         )
         return folder.name
 
+    def post_backtest(request: dict[str, Any], say: Callable[[str], None]) -> str:
+        from bot.analyzer.telegram_reader import post_images
+        from bot.research.scenario_backtest import backtest_post
+
+        current = load_config()
+        published = pd.Timestamp(request["date"])
+        if published.tzinfo is None:
+            published = published.tz_localize("UTC")
+        images: list[Path] = []
+        if request.get("post_id") is not None and not request["answer_json"].strip():
+            conn = connect(db_path(data_dir))
+            try:
+                rel = post_images(conn, current.scenarios.channel, int(request["post_id"]))
+            finally:
+                conn.close()
+            images = [data_dir / p for p in rel]
+        end = published + pd.Timedelta(days=float(request["days"]))
+        for symbol in current.scenarios.symbols:
+            try:
+                make_downloader(say).ensure_history(symbol, published - pd.Timedelta(days=3), end)
+            except Exception as exc:  # без интернета — на том, что уже скачано
+                say(f"{symbol}: не удалось загрузить с Bybit ({type(exc).__name__})")
+        runs = backtest_post(  # ошибка ввода (ValueError) покажется в журнале задачи
+            current,
+            request["text"],
+            published,
+            answer_json=request["answer_json"].strip() or None,
+            images=images,
+            days=float(request["days"]),
+            timeframe=request["timeframe"],
+            allow_image_levels=bool(request["allow_image_levels"]),
+            say=say,
+        )
+        trades = sum(len(r.result.trades) for r in runs if r.result is not None)
+        folders = ", ".join(r.folder.name for r in runs if r.folder is not None)
+        tail = f"; отчёты во вкладке «Бэктесты»: {folders}" if folders else ""
+        return f"сделок: {trades}{tail}"
+
     refresh_loader = make_downloader(lambda _text: None)
     refresher = CandleRefresher(
         lambda symbol, start: refresh_loader.download_klines(symbol, start, "1m"),
@@ -650,6 +758,7 @@ def main() -> None:
         jobs=jobs,
         commands=commands,
         journal_dir=journal_dir,
+        post_backtest=post_backtest,
     )
     host.autostart()
     print(f"Откройте http://{cfg.app.host}:{cfg.app.port}  (остановить: Ctrl+C)")

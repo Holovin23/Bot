@@ -9,6 +9,7 @@ from bot.strategies.breakout import Breakout
 from bot.strategies.composite import Composite
 from bot.strategies.mean_reversion import MeanReversion
 from bot.strategies.random_entry import RandomEntry
+from bot.strategies.telegram_scenario import TelegramScenario
 from bot.strategies.trend_following import TrendFollowing
 
 STRATEGIES: dict[str, type[BaseStrategy]] = {
@@ -16,6 +17,7 @@ STRATEGIES: dict[str, type[BaseStrategy]] = {
     Composite.name: Composite,
     MeanReversion.name: MeanReversion,
     RandomEntry.name: RandomEntry,
+    TelegramScenario.name: TelegramScenario,
     TrendFollowing.name: TrendFollowing,
 }
 

@@ -106,6 +106,11 @@
     .post .meta { color: var(--muted); font-size: 12px; }
     .post .text { white-space: pre-wrap; margin: 4px 0; }
     .bias { font-weight: 600; margin-right: 8px; }
+    .post .imgs img { max-height: 160px; max-width: 260px; margin: 4px 6px 0 0;
+      border: 1px solid var(--border); border-radius: 4px; }
+    .side-LONG { color: #1a7f37; font-weight: 600; } .side-SHORT { color: #cf222e; font-weight: 600; }
+    textarea { font: 12px ui-monospace, monospace; width: 100%; box-sizing: border-box;
+      background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; }
     .bias.BULLISH { color: #1a7f37; } .bias.BEARISH { color: #cf222e; }
     .jrow td:last-child { white-space: normal; word-break: break-all;
       font: 12px ui-monospace, monospace; }
@@ -150,6 +155,7 @@
     <section id="page-journals" class="page"></section>
     <section id="page-commands" class="page"></section>
     <section id="page-telegram" class="page"></section>
+    <section id="page-scenarios" class="page"></section>
   </main>
   <footer>
     Время на графике — локальное, даты периодов — UTC. Графики:
@@ -239,7 +245,7 @@
   };
   const STRATEGY_TITLES = {
     trend_following: "Trend Following", mean_reversion: "Mean Reversion", breakout: "Breakout",
-    composite: "Composite", random_entry: "Random (база)",
+    composite: "Composite", random_entry: "Random (база)", telegram_scenario: "Сценарии TG",
   };
 
   function view(key) {
@@ -266,7 +272,7 @@
     const names = app.strategies.map((s) => s.name).sort((a, b) => rank(a) - rank(b));
     for (const name of names) items.push([name, STRATEGY_TITLES[name] || name]);
     const rest = [["bots", "Боты"], ["data", "Данные"], ["journals", "Журналы"],
-                  ["commands", "Команды"], ["telegram", "Telegram"]];
+                  ["commands", "Команды"], ["telegram", "Telegram"], ["scenarios", "Сценарии"]];
     const runningBy = {};
     for (const b of app.bots) if (b.state === "running") runningBy[b.strategy] = true;
     const btn = ([key, title]) => `<button data-tab="${key}" class="${app.tab === key ? "active" : ""}">` +
@@ -288,7 +294,7 @@
     } else {
       $("page-" + key).classList.add("active");
       ({ bots: renderBotsPage, data: renderDataPage, journals: renderJournalsPage,
-         commands: renderCommandsPage, telegram: renderTelegram })[key]();
+         commands: renderCommandsPage, telegram: renderTelegram, scenarios: renderScenarios })[key]();
     }
   }
 
@@ -1085,6 +1091,120 @@
       }).join("");
   }
 
+  // ===================== Сценарии (docs/10) =====================
+  const scen = { cancelled: false, posts: [] };
+
+  function triggerText(t) {
+    const zone = `${fmt(t.zone_low)}–${fmt(t.zone_high)}`;
+    return ({ close_above: `закрытие выше ${fmt(t.level)}`, close_below: `закрытие ниже ${fmt(t.level)}`,
+              retest: `ретест ${fmt(t.level)}`, touch_zone: `касание зоны ${zone}`, now: "сразу" })[t.type] || t.type;
+  }
+
+  function cellRows(cells) {
+    if (!cells.length) return `<p class="hint">Ячеек нет. Они появляются после разбора постов.</p>`;
+    const rows = cells.map((c) => {
+      const s = c.scenario;
+      const targets = s.targets && s.targets.length ? s.targets.map((x) => fmt(x)).join(", ") : "по умолчанию 2R";
+      const state = c.status !== "ACTIVE" ? `<span class="hint">отменена</span>`
+        : c.needs_review ? `<span class="warn">уровни с картинки</span> <button data-approve="${esc(c.scenario_id)}">Одобрить</button>`
+        : `<span class="win">активна</span>`;
+      return `<tr title="${esc(s.note_ru || "")}"><td>${esc(c.scenario_id)}</td><td>${esc(c.symbol)}</td>` +
+        `<td class="side-${esc(s.side)}">${esc(s.side)}</td><td>${esc(triggerText(s.trigger))}</td>` +
+        `<td class="num">${s.stop === null ? "по умолчанию" : fmt(s.stop)}</td><td>${esc(targets)}</td>` +
+        `<td>${esc(s.level_source)}</td><td class="num">v${c.version}</td><td>${when(c.updated)}</td><td>${state}</td></tr>`;
+    }).join("");
+    return `<table><thead><tr><th>Ячейка</th><th>Монета</th><th>Сторона</th><th>Условие</th><th class="num">Стоп</th>` +
+      `<th>Цели</th><th>Уровни</th><th class="num">Версия</th><th>Обновлена</th><th>Состояние</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  function reportLines(r) {
+    if (!r) return "";
+    const items = [...r.created.map((x) => `создана ${x}`), ...r.updated.map((x) => `обновлена ${x}`),
+      ...r.cancelled.map((x) => `отменена ${x}`), ...r.rejected.map((x) => `<span class="warn">отклонено: ${esc(x)}</span>`)];
+    return items.length ? `<div class="hint">${items.map((x) => x.startsWith("<") ? x : esc(x)).join("<br>")}</div>` : "";
+  }
+
+  function postCard(p, i) {
+    const imgs = p.images.map((u) => `<a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" loading="lazy" alt=""></a>`).join("");
+    const head = p.parsed ? `<span class="badge">${esc(p.kind)}</span> <span class="hint">${esc(p.source)}</span> ${esc(p.summary || "")}`
+      : `<span class="hint">не разобран</span>`;
+    return `<div class="post"><div class="meta">${when(p.time)} · ${esc(p.channel)} #${p.post_id} ` +
+      `<button data-bt="${i}">В бэктест</button></div>` +
+      `<div class="text">${esc(p.text)}</div>${imgs ? `<div class="imgs">${imgs}</div>` : ""}` +
+      `<div>${head}</div>${reportLines(p.report)}</div>`;
+  }
+
+  async function renderScenarios() {
+    const box = $("page-scenarios");
+    if (!box.dataset.ready) {
+      box.dataset.ready = "1";
+      box.innerHTML = `
+        <p class="hint">Сценарии автора канала → ячейки → сделки по правилам бота. Разбор постов: скилл
+          <code>telegram-scenarios</code> в Claude Code (план Б, без оплаты API) или «Команды» → «Сценарии: разбор через Claude API» (план А).
+          Ячейки с уровнями только с картинки бот не торгует, пока вы их не одобрите.</p>
+        <h3>Ячейки <label class="hint"><input type="checkbox" id="sc-cancelled"> показать отменённые</label></h3>
+        <div id="sc-cells"></div>
+        <h3>Бэктест поста</h3>
+        <div class="card">
+          <div class="row"><label>Дата публикации (UTC) <input id="sc-date" placeholder="2025-03-01 10:00" style="width:11em"></label>
+            <label>Дней <input id="sc-days" type="number" value="30" min="1" max="365" style="width:5em"></label>
+            <label>Таймфрейм <select id="sc-tf">${["15m", "1h", "4h"].map((t) => `<option${t === "1h" ? " selected" : ""}>${t}</option>`).join("")}</select></label>
+            <label title="Торговать ячейки, уровни которых взяты только с картинки"><input type="checkbox" id="sc-img"> уровни с картинки</label></div>
+          <div>Текст поста<textarea id="sc-text" rows="5"></textarea></div>
+          <div>Ответ разбора (JSON по схеме). Пусто — разбор через Claude API, платно.<textarea id="sc-answer" rows="5"></textarea></div>
+          <div class="row"><button class="primary" id="sc-run">Запустить</button><span class="hint" id="sc-post"></span></div>
+          <div class="log" id="sc-log"></div>
+        </div>
+        <h3>Посты канала</h3>
+        <div id="sc-posts"><p class="hint">Загрузка…</p></div>`;
+      $("sc-cancelled").onchange = (e) => { scen.cancelled = e.target.checked; renderScenarios(); };
+      $("sc-run").onclick = runPostBacktest;
+    }
+    let data;
+    try { data = await api(`/api/scenarios?cancelled=${scen.cancelled}`); }
+    catch (e) { $("sc-cells").innerHTML = `<p class="loss">${esc(e.message)}</p>`; return; }
+    $("sc-cells").innerHTML = cellRows(data.cells);
+    $("sc-cells").querySelectorAll("button[data-approve]").forEach((b) => b.onclick = async () => {
+      if (!confirm(`Уровни ячейки ${b.dataset.approve} сверены с картинкой? После одобрения бот сможет по ней торговать.`)) return;
+      try { await api(`/api/scenarios/${encodeURIComponent(b.dataset.approve)}/approve`, { method: "POST" }); }
+      catch (e) { alert(e.message); }
+      renderScenarios();
+    });
+    scen.posts = data.posts;
+    $("sc-posts").innerHTML = data.posts.length ? data.posts.map(postCard).join("")
+      : `<p class="hint">Постов нет. Выгрузите канал: «Команды» → «Скачать посты канала».</p>`;
+    $("sc-posts").querySelectorAll("button[data-bt]").forEach((b) => b.onclick = () => {
+      const p = scen.posts[Number(b.dataset.bt)];
+      $("sc-text").value = p.text;
+      $("sc-date").value = isoTime(p.published_at).slice(0, 16);
+      $("sc-answer").value = p.result ? JSON.stringify(p.result, null, 1) : "";
+      $("sc-post").textContent = `пост #${p.post_id}` + (p.result ? ", ответ разбора подставлен" : ", не разобран: картинки поста уйдут в Claude API");
+      $("sc-post").dataset.id = p.post_id;
+      $("sc-text").scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  }
+
+  async function runPostBacktest() {
+    const postId = $("sc-post").dataset.id;
+    const body = { text: $("sc-text").value, date: $("sc-date").value.trim(), answer_json: $("sc-answer").value,
+                   days: Number($("sc-days").value), timeframe: $("sc-tf").value,
+                   allow_image_levels: $("sc-img").checked, post_id: postId ? Number(postId) : null };
+    $("sc-run").disabled = true;
+    try {
+      const { job_id } = await api("/api/scenarios/backtest", { method: "POST", body });
+      const job = await watchJob(job_id, (j) => $("sc-log").textContent = jobText(j));
+      if (job.status === "done") await refreshBacktests();
+    } catch (e) { $("sc-log").textContent = e.message; }
+    finally { $("sc-run").disabled = false; }
+  }
+  // Текст поста изменили руками — это уже не пост из ленты, его картинки не берём
+  document.addEventListener("input", (e) => {
+    if (e.target && e.target.id === "sc-text" && $("sc-post").dataset.id) {
+      delete $("sc-post").dataset.id;
+      $("sc-post").textContent = "";
+    }
+  });
+
   // ===================== запуск =====================
   async function loadMeta() {
     const meta = await api("/api/strategies");
@@ -1104,7 +1224,7 @@
     await Promise.all([refreshBacktests(), refreshBots()]);
     let start = "overview";
     try { start = localStorage.getItem("bot.tab") || "overview"; } catch (e) { /* нет localStorage */ }
-    const known = ["overview", "bots", "data", "journals", "commands", "telegram", ...app.strategies.map((s) => s.name)];
+    const known = ["overview", "bots", "data", "journals", "commands", "telegram", "scenarios", ...app.strategies.map((s) => s.name)];
     openTab(known.includes(start) ? start : "overview");
   })();
   </script>
