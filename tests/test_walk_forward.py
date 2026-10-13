@@ -72,3 +72,15 @@ def test_walk_forward_on_synthetic() -> None:
     assert result.stats is not None
     assert result.stats.trades == sum(result.windows["test_trades"])
     assert result.windows["params"].iloc[0].startswith("stop_atr=")
+
+
+def test_warmup_covers_strategy_history() -> None:
+    from bot.backtest.walk_forward import WARMUP, warmup_for
+    from bot.strategies.registry import create_strategy
+
+    # mean_reversion 1h: истории нужно меньше 30 дней — остаётся WARMUP
+    assert warmup_for(create_strategy("mean_reversion", "1h")) == WARMUP
+    # trend_following 4h: 201 свеча × 1,5 × 4 ч = 1206 ч = 50,25 дня
+    assert warmup_for(create_strategy("trend_following", "4h")) == pd.Timedelta(hours=1206)
+    # дневной импульс: 56 свечей × 1,5 = 84 дня
+    assert warmup_for(create_strategy("time_series_momentum", "1d")) == pd.Timedelta(days=84)
