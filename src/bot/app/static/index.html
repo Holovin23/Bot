@@ -3,517 +3,1110 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Bot — график</title>
+  <title>Bot</title>
   <link rel="icon" href="data:,">
   <style>
-    :root { --bg: #ffffff; --fg: #1f2328; --muted: #6e7781; --border: #d0d7de; }
+    :root { --bg: #ffffff; --fg: #1f2328; --muted: #6e7781; --border: #d0d7de;
+      --accent: #0969da; --panel: #f6f8fa; }
     @media (prefers-color-scheme: dark) {
-      :root { --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --border: #30363d; }
+      :root { --bg: #0d1117; --fg: #e6edf3; --muted: #8b949e; --border: #30363d;
+        --accent: #4493f8; --panel: #161b22; }
     }
     html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
       font: 14px system-ui, sans-serif; }
     body { display: flex; flex-direction: column; }
-    header { display: flex; gap: 12px; align-items: center; padding: 8px 16px;
-      border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-    select { font: inherit; padding: 2px 6px; }
-    .legend { display: flex; gap: 12px; color: var(--muted); }
+    button, select, input { font: inherit; }
+    select, input { padding: 2px 6px; }
+    button { cursor: pointer; padding: 2px 10px; border-radius: 6px; border: 1px solid var(--border);
+      background: var(--panel); color: var(--fg); }
+    button:disabled { opacity: .5; cursor: default; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button.danger { color: #fff; background: #cf222e; border-color: #a40e26; }
+    a { color: var(--accent); }
+    code { font: 12px ui-monospace, monospace; background: var(--panel); padding: 0 3px; }
+    /* Главные вкладки */
+    nav { display: flex; gap: 2px; padding: 6px 12px 0; border-bottom: 1px solid var(--border);
+      flex-wrap: wrap; align-items: flex-end; }
+    nav .brand { font-weight: 700; margin-right: 12px; padding-bottom: 6px; }
+    nav button { border: 1px solid transparent; border-bottom: none; background: none;
+      border-radius: 6px 6px 0 0; padding: 5px 12px; color: var(--muted); }
+    nav button.active { color: var(--fg); border-color: var(--border); background: var(--bg);
+      margin-bottom: -1px; }
+    nav .sep { width: 1px; background: var(--border); align-self: stretch; margin: 4px 6px 6px; }
+    nav .running-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+      background: #1a7f37; margin-left: 5px; vertical-align: middle; }
+    main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .page { display: none; flex: 1; min-height: 0; overflow: auto; padding: 8px 16px; }
+    .page.active { display: block; }
+    #workspace.active { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+    /* Панель графика */
+    .toolbar { display: flex; gap: 8px 14px; align-items: center; padding: 6px 16px;
+      flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+    .toolbar .group { display: flex; gap: 6px; align-items: center; }
+    #w-status { color: var(--muted); margin-left: auto; }
+    .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--muted); padding: 4px 16px 0;
+      font-size: 12px; }
     .legend span::before { content: ""; display: inline-block; width: 12px; height: 3px;
       margin-right: 4px; vertical-align: middle; background: var(--c); }
-    #status { color: var(--muted); margin-left: auto; }
-    #chart { flex: 1; min-height: 300px; }
-    #panel { height: 34vh; min-height: 180px; display: flex; flex-direction: column;
+    #tradeinfo { padding: 2px 16px; color: var(--muted); min-height: 1.3em; font-size: 13px; }
+    #tradeinfo b { color: var(--fg); font-weight: 600; }
+    #charts { flex: 1; min-height: 240px; display: flex; flex-direction: column; overflow: hidden; }
+    #chart { flex: 3 1 0; min-height: 140px; }
+    .pane { flex: 1 1 0; min-height: 44px; max-height: 120px; border-top: 1px solid var(--border);
+      position: relative; }
+    .pane .pane-title { position: absolute; left: 8px; top: 2px; z-index: 3; font-size: 11px;
+      color: var(--muted); pointer-events: none; }
+    #nodata { padding: 6px 16px; display: none; }
+    /* Нижняя панель */
+    #panel { height: 38vh; min-height: 200px; display: flex; flex-direction: column;
       border-top: 1px solid var(--border); }
-    .tabs { display: flex; gap: 4px; padding: 4px 16px 0; }
-    .tabs button { font: inherit; background: none; color: var(--muted); border: 1px solid
-      transparent; border-bottom: none; padding: 4px 10px; cursor: pointer; }
-    .tabs button.active { color: var(--fg); border-color: var(--border);
-      border-radius: 6px 6px 0 0; }
-    .tab { flex: 1; overflow: auto; padding: 4px 16px; display: none; }
-    .tab.active { display: block; }
-    #tab-equity.active { display: flex; }
+    .subtabs { display: flex; gap: 4px; padding: 4px 16px 0; flex-wrap: wrap; }
+    .subtabs button { background: none; border: 1px solid transparent; border-bottom: none;
+      border-radius: 6px 6px 0 0; color: var(--muted); padding: 3px 10px; }
+    .subtabs button.active { color: var(--fg); border-color: var(--border); }
+    .sub { flex: 1; overflow: auto; padding: 6px 16px; display: none; }
+    .sub.active { display: block; }
+    #sub-equity.active { display: flex; }
     #equity { flex: 1; }
     table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
-    th, td { text-align: right; padding: 2px 8px; border-bottom: 1px solid var(--border);
+    th, td { text-align: left; padding: 2px 8px; border-bottom: 1px solid var(--border);
       white-space: nowrap; }
-    th { position: sticky; top: 0; background: var(--bg); color: var(--muted); }
-    th:nth-child(2), td:nth-child(2), th:nth-child(7), td:nth-child(7) { text-align: left; }
-    tbody tr { cursor: pointer; }
-    tbody tr:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); }
-    tbody tr.selected { background: color-mix(in srgb, #4a90e2 18%, transparent); }
-    .win { color: #1a7f37; } .loss { color: #cf222e; }
-    #report { white-space: pre-wrap; font: 13px ui-monospace, monospace; margin: 0; }
+    td.num, th.num { text-align: right; }
+    th { position: sticky; top: 0; background: var(--bg); color: var(--muted); font-weight: 500; }
+    tr.click { cursor: pointer; }
+    tr.click:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+    tr.selected { background: color-mix(in srgb, #4a90e2 18%, transparent); }
+    .win { color: #1a7f37; } .loss { color: #cf222e; } .warn { color: #9a6700; }
     .hint { color: var(--muted); }
+    .row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 6px 0; }
+    .row label { display: inline-flex; gap: 4px; align-items: center; }
+    .params input { width: 7em; }
+    .log { white-space: pre-wrap; font: 12px ui-monospace, monospace; background: var(--panel);
+      border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; max-height: 260px;
+      overflow: auto; margin: 6px 0; }
+    .log:empty { display: none; }
+    pre.report { white-space: pre-wrap; font: 13px ui-monospace, monospace; margin: 0; }
+    h3 { margin: 12px 0 6px; font-size: 15px; }
+    h4 { margin: 10px 0 4px; font-size: 14px; }
+    .card { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin: 8px 0;
+      background: var(--panel); }
+    .badge { display: inline-block; padding: 0 6px; border-radius: 10px; font-size: 12px;
+      border: 1px solid var(--border); }
+    .badge.running { color: #1a7f37; border-color: #1a7f37; }
+    .badge.error { color: #cf222e; border-color: #cf222e; }
+    .badge.starting { color: #9a6700; border-color: #9a6700; }
+    .lvl-warning { color: #9a6700; } .lvl-error { color: #cf222e; }
+    .cols { display: grid; grid-template-columns: minmax(220px, 300px) 1fr; gap: 16px; }
+    .cmdlist button { display: block; width: 100%; text-align: left; margin: 2px 0;
+      background: none; border-color: transparent; }
+    .cmdlist button.active { border-color: var(--border); background: var(--panel); }
+    .cmdlist .group { color: var(--muted); font-size: 12px; margin-top: 8px; }
+    .checks { display: flex; flex-wrap: wrap; gap: 4px 12px; }
     .post { border-bottom: 1px solid var(--border); padding: 6px 0; }
     .post .meta { color: var(--muted); font-size: 12px; }
     .post .text { white-space: pre-wrap; margin: 4px 0; }
     .bias { font-weight: 600; margin-right: 8px; }
     .bias.BULLISH { color: #1a7f37; } .bias.BEARISH { color: #cf222e; }
-    .row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 6px 0; }
-    .row input { font: inherit; width: 9em; }
-    .row input[type=date] { width: auto; }
-    #tradeinfo { padding: 4px 16px; color: var(--muted); min-height: 1.4em; }
-    #tradeinfo b { color: var(--fg); font-weight: 600; }
-    button.danger { color: #fff; background: #cf222e; border: 1px solid #a40e26;
-      border-radius: 6px; padding: 3px 10px; cursor: pointer; font: inherit; }
-    #tab-bot h4 { margin: 10px 0 4px; }
-    #tab-bot td, #tab-bot th { text-align: left; }
-    .lvl-warning { color: #9a6700; } .lvl-error { color: #cf222e; }
-    footer { padding: 4px 16px; color: var(--muted); font-size: 12px;
+    .jrow td:last-child { white-space: normal; word-break: break-all;
+      font: 12px ui-monospace, monospace; }
+    footer { padding: 3px 16px; color: var(--muted); font-size: 12px;
       border-top: 1px solid var(--border); }
     footer a { color: inherit; }
   </style>
 </head>
 <body>
-  <header>
-    <label>Символ <select id="symbol"></select></label>
-    <label>Таймфрейм <select id="timeframe"></select></label>
-    <label>Бэктест <select id="backtest"><option value="">—</option></select></label>
-    <label>Сделка <select id="trade" disabled></select></label>
-    <div class="legend">
-      <span style="--c:#f5a623">EMA20</span>
-      <span style="--c:#4a90e2">EMA50</span>
-      <span style="--c:#bd10e0">EMA200</span>
-      <span style="--c:#8b949e">Bollinger (20, 2)</span>
-    </div>
-    <button id="refresh" title="Догрузить свежие свечи с Bybit и перерисовать график">Обновить</button>
-    <div id="status"></div>
-  </header>
-  <div id="tradeinfo"></div>
-  <div id="chart"></div>
-  <div id="panel">
-    <div class="tabs">
-      <button data-tab="trades" class="active">Сделки</button>
-      <button data-tab="equity">Капитал</button>
-      <button data-tab="report">Отчёт</button>
-      <button data-tab="run">Запуск</button>
-      <button data-tab="telegram">Telegram</button>
-      <button data-tab="bot">Бот</button>
-    </div>
-    <div id="tab-trades" class="tab active"><p class="hint">Выберите бэктест.</p></div>
-    <div id="tab-equity" class="tab"><div id="equity"></div></div>
-    <div id="tab-report" class="tab"><pre id="report" class="hint">Выберите бэктест.</pre></div>
-    <div id="tab-telegram" class="tab"><p class="hint">Загрузка…</p></div>
-    <div id="tab-bot" class="tab">
-      <div class="row">
-        <label>Режим <select id="b-mode"><option>paper</option><option>demo</option><option>live</option></select></label>
-        <button id="b-kill" class="danger">Аварийная остановка</button>
-        <button id="b-resume">Возобновить</button>
-        <span id="b-msg" class="hint"></span>
-      </div>
-      <div id="b-state"></div>
-      <h4>Открытые сделки</h4><div id="b-open"></div>
-      <h4>Закрытые сделки</h4><div id="b-closed"></div>
-      <h4>События</h4><div id="b-events"></div>
-    </div>
-    <div id="tab-run" class="tab">
-      <form id="runform">
-        <div class="row">
-          <label>Стратегия <select id="r-strategy"></select></label>
-          <label>Символ <select id="r-symbol"></select></label>
-          <label>Таймфрейм <select id="r-timeframe"></select></label>
-          <label>С <input id="r-start" type="date" value="2021-01-01"></label>
-          <label>по <input id="r-end" type="date" value="2024-06-30"></label>
-          <button type="submit">Запустить</button>
-          <span id="r-status" class="hint"></span>
+  <nav id="nav"><span class="brand">Bot</span></nav>
+  <main>
+    <!-- Рабочая область графика: «Обзор» и вкладки стратегий -->
+    <section id="workspace" class="page">
+      <div class="toolbar">
+        <div class="group"><label>Символ <select id="w-symbol"></select></label>
+          <label>Таймфрейм <select id="w-tf"></select></label></div>
+        <div class="group" title="Показать график за свой период (даты в UTC)">
+          Период с <input id="w-from" type="date"> по <input id="w-to" type="date">
+          <button id="w-show">Показать</button>
+          <button id="w-live" title="Вернуться к живому графику (последние свечи)">Сейчас</button>
         </div>
-        <div id="r-params" class="row"></div>
-        <p class="hint">Бэктест на in-sample. Validation и hold-out проверяются командой
-          <code>bot.research.validate</code>, а не отсюда.</p>
-      </form>
-    </div>
-  </div>
+        <button id="w-refresh" title="Догрузить свежие свечи с Bybit и перерисовать">Обновить</button>
+        <span id="w-status"></span>
+      </div>
+      <div class="legend" id="legend"></div>
+      <div id="tradeinfo"></div>
+      <div id="nodata" class="hint"></div>
+      <div id="charts"><div id="chart"></div></div>
+      <div id="panel">
+        <div class="subtabs" id="subtabs"></div>
+        <div id="sub-backtest" class="sub"></div>
+        <div id="sub-trades" class="sub"></div>
+        <div id="sub-equity" class="sub"><div id="equity"></div></div>
+        <div id="sub-report" class="sub"></div>
+        <div id="sub-bots" class="sub"></div>
+        <div id="sub-about" class="sub"></div>
+      </div>
+    </section>
+
+    <section id="page-bots" class="page"></section>
+    <section id="page-data" class="page"></section>
+    <section id="page-journals" class="page"></section>
+    <section id="page-commands" class="page"></section>
+    <section id="page-telegram" class="page"></section>
+  </main>
   <footer>
-    Время — локальное. Графики:
+    Время на графике — локальное, даты периодов — UTC. Графики:
     <a href="https://www.tradingview.com/" target="_blank" rel="noopener">TradingView</a>
     Lightweight Charts™ (Apache 2.0).
   </footer>
 
   <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
   <script>
-    const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    const chart = LightweightCharts.createChart(document.getElementById("chart"), {
+  "use strict";
+  // ===================== общие помощники =====================
+  const $ = (id) => document.getElementById(id);
+  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const esc = (t) => String(t ?? "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const fmt = (v, d = 4) => v === null || v === undefined ? "—"
+    : Number(v).toLocaleString(undefined, { maximumFractionDigits: d });
+  const num = (x, d = 2) => (x === null || x === undefined ? "—" : Number(x).toFixed(d));
+  const when = (t) => t === null || t === undefined ? "—" : new Date(t * 1000).toLocaleString();
+  const isoTime = (s) => s ? String(s).slice(0, 19).replace("T", " ") : "—";
+  // Сервер отдаёт время в UTC; на графике сдвигаем на часовой пояс компьютера.
+  const local = (t) => t - new Date(t * 1000).getTimezoneOffset() * 60;
+  const utcDay = (text) => text ? Date.parse(text + "T00:00:00Z") / 1000 : null;
+  const TF_SECONDS = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400 };
+
+  async function api(path, options = {}) {
+    const opts = { ...options };
+    if (opts.body !== undefined && typeof opts.body !== "string") {
+      opts.body = JSON.stringify(opts.body);
+      opts.headers = { "Content-Type": "application/json" };
+    }
+    const response = await fetch(path, opts);
+    let data = null;
+    try { data = await response.json(); } catch (e) { data = null; }
+    if (!response.ok) {
+      const detail = data && data.detail;
+      let message = `ошибка ${response.status}`;
+      if (typeof detail === "string") message = detail;
+      else if (Array.isArray(detail)) {
+        message = detail.map((d) => `${(d.loc || []).slice(1).join(".")}: ${d.msg}`).join("; ");
+      } else if (detail && detail.message) message = detail.message;
+      const error = new Error(message);
+      error.status = response.status;
+      error.detail = detail;
+      throw error;
+    }
+    return data;
+  }
+
+  // Следить за фоновой задачей: onLog получает последние строки журнала задачи.
+  async function watchJob(jobId, onLog) {
+    for (;;) {
+      const job = await api(`/api/jobs/${jobId}?log=300`);
+      onLog(job);
+      if (job.status !== "running") return job;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+  const jobText = (job) => (job.log || []).join("\n");
+
+  function parseValue(text) {
+    const t = String(text).trim();
+    if (t === "true" || t === "false") return t === "true";
+    if (t === "null" || t === "") return null;
+    const n = Number(t);
+    return Number.isNaN(n) ? t : n;
+  }
+
+  function chartOptions(extra = {}) {
+    return {
       autoSize: true,
       layout: { background: { color: dark ? "#0d1117" : "#ffffff" },
                 textColor: dark ? "#e6edf3" : "#1f2328", attributionLogo: true },
       grid: { vertLines: { color: dark ? "#21262d" : "#eef1f4" },
               horzLines: { color: dark ? "#21262d" : "#eef1f4" } },
       timeScale: { timeVisible: true, secondsVisible: false },
-    });
-    const candles = chart.addCandlestickSeries();
-    const line = (color, width = 2) => chart.addLineSeries({
-      color, lineWidth: width, priceLineVisible: false, lastValueVisible: false,
-    });
-    const lines = {
-      ema20: line("#f5a623"), ema50: line("#4a90e2"), ema200: line("#bd10e0"),
-      bb_upper: line("#8b949e", 1), bb_middle: line("#8b949e", 1), bb_lower: line("#8b949e", 1),
+      rightPriceScale: { minimumWidth: 90 },
+      ...extra,
     };
+  }
 
-    // Сервер отдаёт время в UTC; сдвигаем на часовой пояс компьютера.
-    const local = (t) => t - new Date(t * 1000).getTimezoneOffset() * 60;
-    const status = document.getElementById("status");
-    const symbolSel = document.getElementById("symbol");
-    const tfSel = document.getElementById("timeframe");
+  // ===================== данные приложения =====================
+  const app = {
+    symbols: [], timeframes: [], strategies: [], backtests: [], bots: [],
+    tab: "overview",        // текущая главная вкладка
+    views: {},              // состояние каждой вкладки графика
+  };
+  const STRATEGY_TITLES = {
+    trend_following: "Trend Following", mean_reversion: "Mean Reversion", breakout: "Breakout",
+    composite: "Composite", random_entry: "Random (база)",
+  };
 
-    const backtestSel = document.getElementById("backtest");
-    const tradeSel = document.getElementById("trade");
-    const info = document.getElementById("tradeinfo");
-    let backtest = null;      // выбранный бэктест со сделками
-    let priceLines = [];      // линии входа, стопа и тейка выбранной сделки
-    const TF_SECONDS = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400 };
-    const BARS_AFTER_EXIT = 60;  // сколько свечей показать после выхода
-
-    const fmt = (v) => v === null ? "—" : Number(v).toLocaleString(undefined,
-                                                                   { maximumFractionDigits: 4 });
-    const when = (t) => new Date(t * 1000).toLocaleString();
-
-    let viewUntil = null;     // null — живой график; число — смотрим историческую сделку
-    let reloadTimer = null;
-
-    async function load(until = null, keepView = false) {
-      viewUntil = until;
-      if (!keepView) status.textContent = "загрузка…";
-      const range = keepView ? chart.timeScale().getVisibleLogicalRange() : null;
-      const params = new URLSearchParams({ symbol: symbolSel.value, timeframe: tfSel.value,
-                                           limit: 1000 });
-      if (until !== null) params.set("until", until);
-      const response = await fetch("/api/candles?" + params);
-      if (!response.ok) { status.textContent = "ошибка " + response.status; return; }
-      const data = await response.json();
-      const rows = data.candles;
-      candles.setData(rows.map((r) => ({ time: local(r.time), open: r.open, high: r.high,
-                                         low: r.low, close: r.close })));
-      for (const [name, series] of Object.entries(lines)) {
-        series.setData(rows.filter((r) => r[name] !== null)
-                           .map((r) => ({ time: local(r.time), value: r[name] })));
-      }
-      drawTrades(rows);
-      if (range) chart.timeScale().setVisibleLogicalRange(range);
-      else if (until === null) chart.timeScale().fitContent();
-      status.textContent = statusText(data, rows);
-      // Пока идёт догрузка с Bybit — перерисовать через 5 с, иначе раз в минуту.
-      clearTimeout(reloadTimer);
-      if (until === null) {
-        reloadTimer = setTimeout(() => { if (viewUntil === null) load(null, true); },
-                                 data.refreshing ? 5000 : 60000);
-      }
-    }
-
-    function statusText(data, rows) {
-      if (!rows.length) {
-        return data.refreshing ? "загружаю свечи с Bybit…"
-          : "нет данных — загрузите историю (python -m bot.data.downloader)";
-      }
-      let text = `${rows.length} свечей, последняя минута ${data.last_minute ? when(data.last_minute) : "—"}`;
-      const lagMin = data.last_minute ? Math.round((Date.now() / 1000 - data.last_minute) / 60) : 0;
-      if (data.refreshing) text += " · догружаю свежие свечи с Bybit…";
-      else if (data.refresh_error) text += ` · ${data.refresh_error}`;
-      else if (lagMin > 3 && viewUntil === null) text += ` · отстаёт на ${lagMin} мин`;
-      return text;
-    }
-
-    // Маркеры входов и выходов всех сделок бэктеста, попавших на загруженные свечи.
-    function drawTrades(rows) {
-      priceLines.forEach((l) => candles.removePriceLine(l));
-      priceLines = [];
-      const same = backtest && backtest.symbol === symbolSel.value;
-      if (!same || !rows.length) { candles.setMarkers([]); return; }
-      const step = TF_SECONDS[tfSel.value];
-      const first = rows[0].time, last = rows.at(-1).time + step;
-      const bar = (t) => local(Math.floor(t / step) * step);
-      const markers = [];
-      for (const t of backtest.trades) {
-        const long = t.side === "LONG";
-        const chosen = String(t.number) === tradeSel.value;
-        if (t.entry_time >= first && t.entry_time < last) {
-          markers.push({ time: bar(t.entry_time), position: long ? "belowBar" : "aboveBar",
-                         shape: long ? "arrowUp" : "arrowDown",
-                         color: long ? "#1a7f37" : "#cf222e",
-                         text: chosen ? `#${t.number} вход` : `#${t.number}` });
-        }
-        if (t.exit_time !== null && t.exit_time >= first && t.exit_time < last) {
-          markers.push({ time: bar(t.exit_time), position: long ? "aboveBar" : "belowBar",
-                         shape: "circle", color: t.r_multiple >= 0 ? "#1a7f37" : "#cf222e",
-                         text: `${t.exit_reason} ${t.r_multiple.toFixed(2)}R` });
-        }
-      }
-      markers.sort((a, b) => a.time - b.time);
-      candles.setMarkers(markers);
-
-      const t = selectedTrade();
-      if (!t) return;
-      const add = (price, color, title, style = 2) => {
-        if (price !== null) {
-          priceLines.push(candles.createPriceLine({ price, color, title, lineWidth: 1,
-                                                    lineStyle: style, axisLabelVisible: true }));
-        }
+  function view(key) {
+    if (!app.views[key]) {
+      const strategy = key === "overview" ? null : app.strategies.find((s) => s.name === key);
+      app.views[key] = {
+        key, strategy: strategy ? strategy.name : null,
+        params: strategy ? { ...strategy.params } : {},
+        symbol: app.symbols[0], tf: "1h", range: null,
+        source: null,      // {type: "backtest"|"bot", id, trades}
+        trade: null,       // номер выбранной сделки
+        sub: key === "overview" ? "backtests" : "backtest",
+        jobLog: "",
       };
-      add(t.entry_price, "#4a90e2", "вход", 0);
-      add(t.initial_stop, "#cf222e", "стоп");
-      if (t.stop !== t.initial_stop) add(t.stop, "#fb8f44", "стоп (трейлинг)");
-      add(t.take, "#1a7f37", "тейк");
     }
+    return app.views[key];
+  }
 
-    // Вкладки под графиком
-    const tabs = document.querySelectorAll(".tabs button");
-    tabs.forEach((b) => b.onclick = () => {
-      tabs.forEach((x) => x.classList.toggle("active", x === b));
-      document.querySelectorAll(".tab").forEach((t) =>
-        t.classList.toggle("active", t.id === "tab-" + b.dataset.tab));
-      if (b.dataset.tab === "equity") requestAnimationFrame(() => equityChart.timeScale().fitContent());
-      if (b.dataset.tab === "telegram") loadTelegram();
-      if (b.dataset.tab === "bot") loadBot();
-    });
+  // ===================== главные вкладки =====================
+  function renderNav() {
+    const items = [["overview", "Обзор"]];
+    const order = ["trend_following", "mean_reversion", "breakout", "composite", "random_entry"];
+    const rank = (n) => (order.includes(n) ? order.indexOf(n) : order.length);
+    const names = app.strategies.map((s) => s.name).sort((a, b) => rank(a) - rank(b));
+    for (const name of names) items.push([name, STRATEGY_TITLES[name] || name]);
+    const rest = [["bots", "Боты"], ["data", "Данные"], ["journals", "Журналы"],
+                  ["commands", "Команды"], ["telegram", "Telegram"]];
+    const runningBy = {};
+    for (const b of app.bots) if (b.state === "running") runningBy[b.strategy] = true;
+    const btn = ([key, title]) => `<button data-tab="${key}" class="${app.tab === key ? "active" : ""}">` +
+      `${esc(title)}${runningBy[key] ? '<span class="running-dot" title="работает paper-бот"></span>' : ""}</button>`;
+    $("nav").innerHTML = `<span class="brand">Bot</span>` + items.map(btn).join("") +
+      `<span class="sep"></span>` + rest.map(btn).join("");
+    $("nav").querySelectorAll("button").forEach((b) => b.onclick = () => openTab(b.dataset.tab));
+  }
 
-    const equityChart = LightweightCharts.createChart(document.getElementById("equity"), {
-      autoSize: true,
-      layout: { background: { color: dark ? "#0d1117" : "#ffffff" },
-                textColor: dark ? "#e6edf3" : "#1f2328", attributionLogo: true },
-      grid: { vertLines: { visible: false }, horzLines: { color: dark ? "#21262d" : "#eef1f4" } },
-      timeScale: { timeVisible: true, secondsVisible: false },
-    });
-    const equityLine = equityChart.addLineSeries({ color: "#4a90e2", lineWidth: 2 });
+  function openTab(key) {
+    app.tab = key;
+    try { localStorage.setItem("bot.tab", key); } catch (e) { /* без localStorage */ }
+    renderNav();
+    const isChart = key === "overview" || app.strategies.some((s) => s.name === key);
+    document.querySelectorAll(".page").forEach((p) => p.classList.remove("active"));
+    if (isChart) {
+      $("workspace").classList.add("active");
+      showView(view(key));
+    } else {
+      $("page-" + key).classList.add("active");
+      ({ bots: renderBotsPage, data: renderDataPage, journals: renderJournalsPage,
+         commands: renderCommandsPage, telegram: renderTelegram })[key]();
+    }
+  }
 
-    function renderTable() {
-      const box = document.getElementById("tab-trades");
-      if (!backtest || !backtest.trades.length) {
-        box.innerHTML = `<p class="hint">${backtest ? "В бэктесте нет сделок." : "Выберите бэктест."}</p>`;
-        return;
+  // ===================== графики =====================
+  const chart = LightweightCharts.createChart($("chart"), chartOptions());
+  const candles = chart.addCandlestickSeries();
+  let overlays = [];        // линии поверх свечей
+  let panes = [];           // {chart, el, series: []}
+  let priceLines = [];
+  let syncing = false;
+  chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+    if (syncing || !range) return;
+    syncing = true;
+    panes.forEach((p) => p.chart.timeScale().setVisibleLogicalRange(range));
+    syncing = false;
+  });
+
+  function clearIndicators() {
+    overlays.forEach((s) => chart.removeSeries(s));
+    overlays = [];
+    panes.forEach((p) => { p.chart.remove(); p.el.remove(); });
+    panes = [];
+  }
+
+  function lineSeries(target, s) {
+    if (s.kind === "histogram") {
+      return target.addHistogramSeries({ color: s.color + "88", priceLineVisible: false,
+                                         lastValueVisible: false });
+    }
+    return target.addLineSeries({ color: s.color, lineWidth: s.pane === "price" ? 2 : 1.5,
+      lineStyle: s.dashed ? 2 : 0, priceLineVisible: false, lastValueVisible: s.pane !== "price" });
+  }
+
+  function seriesData(rows, values) {
+    // Пустые точки (whitespace) сохраняют выравнивание панелей по свечам
+    return rows.map((r, i) => values[i] === null || values[i] === undefined
+      ? { time: local(r.time) } : { time: local(r.time), value: values[i] });
+  }
+
+  const OVERVIEW_SERIES = [
+    { column: "ema20", label: "EMA20", color: "#f5a623", pane: "price" },
+    { column: "ema50", label: "EMA50", color: "#4a90e2", pane: "price" },
+    { column: "ema200", label: "EMA200", color: "#bd10e0", pane: "price" },
+    { column: "bb_upper", label: "Bollinger (20, 2)", color: "#8b949e", pane: "price" },
+    { column: "bb_middle", label: "", color: "#8b949e", pane: "price" },
+    { column: "bb_lower", label: "", color: "#8b949e", pane: "price" },
+  ];
+
+  function drawIndicators(rows, series) {
+    clearIndicators();
+    const legend = [];
+    const byPane = {};
+    for (const s of series) {
+      if (s.label) legend.push(`<span style="--c:${s.color}" title="${esc(s.pane === "price" ? "на графике цены" : "панель " + s.pane)}">${esc(s.label)}</span>`);
+      if (s.pane === "price") {
+        const line = lineSeries(chart, s);
+        line.setData(seriesData(rows, s.values));
+        overlays.push(line);
+      } else {
+        (byPane[s.pane] = byPane[s.pane] || []).push(s);
       }
-      const rows = backtest.trades.map((t) => {
-        const cls = t.r_multiple >= 0 ? "win" : "loss";
-        return `<tr data-n="${t.number}"><td>${t.number}</td><td>${t.side}</td>` +
-          `<td>${when(t.entry_time)}</td><td>${fmt(t.entry_price)}</td>` +
-          `<td>${t.exit_time === null ? "—" : when(t.exit_time)}</td><td>${fmt(t.exit_price)}</td>` +
-          `<td>${t.exit_reason}</td><td class="${cls}">${t.r_multiple.toFixed(2)}</td>` +
-          `<td class="${cls}">${fmt(t.net_pnl)}</td></tr>`;
-      }).join("");
-      box.innerHTML = `<table><thead><tr><th>#</th><th>Сторона</th><th>Вход</th><th>Цена</th>` +
-        `<th>Выход</th><th>Цена</th><th>Причина</th><th>R</th><th>USDT</th></tr></thead>` +
-        `<tbody>${rows}</tbody></table>`;
-      box.querySelectorAll("tbody tr").forEach((tr) => tr.onclick = () => {
-        tradeSel.value = tr.dataset.n;
-        showTrade();
-      });
-      markRow();
     }
-
-    function markRow() {
-      document.querySelectorAll("#tab-trades tbody tr").forEach((tr) =>
-        tr.classList.toggle("selected", tr.dataset.n === tradeSel.value));
-    }
-
-    async function loadExtras(id) {
-      const [eq, rep] = await Promise.all([
-        fetch(`/api/backtests/${encodeURIComponent(id)}/equity`).then((r) => r.json()),
-        fetch(`/api/backtests/${encodeURIComponent(id)}/report`).then((r) => r.json()),
-      ]);
-      equityLine.setData(eq.equity.map((p) => ({ time: local(p.time), value: p.value })));
-      equityChart.timeScale().fitContent();
-      const report = document.getElementById("report");
-      report.textContent = rep.report || "Отчёта нет.";
-      report.classList.toggle("hint", !rep.report);
-    }
-
-    function selectedTrade() {
-      if (!backtest) return null;
-      return backtest.trades.find((t) => String(t.number) === tradeSel.value) || null;
-    }
-
-    function showTrade() {
-      markRow();
-      const t = selectedTrade();
-      if (!t) { info.textContent = ""; load(); return; }
-      info.innerHTML = `<b>#${t.number} ${t.side}</b> вход ${when(t.entry_time)} по ` +
-        `${fmt(t.entry_price)}, стоп ${fmt(t.initial_stop)}, тейк ${fmt(t.take)}; ` +
-        `выход ${t.exit_time === null ? "—" : when(t.exit_time)} по ${fmt(t.exit_price)} ` +
-        `(${t.exit_reason}), <b>${t.r_multiple.toFixed(2)}R, ${fmt(t.net_pnl)} USDT</b>`;
-      const step = TF_SECONDS[tfSel.value];
-      load((t.exit_time ?? t.entry_time) + BARS_AFTER_EXIT * step).then(() => {
-        const from = local(t.entry_time) - 60 * step;
-        const to = local(t.exit_time ?? t.entry_time) + BARS_AFTER_EXIT * step;
-        chart.timeScale().setVisibleRange({ from, to });
-      });
-    }
-
-    async function chooseBacktest() {
-      backtest = null;
-      tradeSel.innerHTML = "";
-      tradeSel.disabled = true;
-      info.textContent = "";
-      if (!backtestSel.value) {
-        renderTable();
-        equityLine.setData([]);
-        document.getElementById("report").textContent = "Выберите бэктест.";
-        load();
-        return;
-      }
-      const response = await fetch("/api/backtests/" + encodeURIComponent(backtestSel.value));
-      if (!response.ok) { status.textContent = "ошибка " + response.status; return; }
-      backtest = await response.json();
-      symbolSel.value = backtest.symbol;
-      if (TF_SECONDS[backtest.timeframe]) tfSel.value = backtest.timeframe;
-      tradeSel.innerHTML = `<option value="">— текущий график —</option>` + backtest.trades.map((t) =>
-        `<option value="${t.number}">#${t.number} ${new Date(t.entry_time * 1000)
-          .toLocaleDateString()} ${t.side} ${t.exit_reason} ${t.r_multiple.toFixed(2)}R</option>`
-      ).join("");
-      tradeSel.disabled = backtest.trades.length === 0;
-      renderTable();
-      loadExtras(backtest.id);
-      if (backtest.trades.length) { tradeSel.value = String(backtest.trades[0].number); showTrade(); }
-      else { info.textContent = "в бэктесте нет сделок"; load(); }
-    }
-
-    // Лента Telegram с разбором ИИ (только справочно, на сделки не влияет)
-    const escapeHtml = (t) => t.replace(/[&<>"]/g, (c) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
-    async function loadTelegram() {
-      const box = document.getElementById("tab-telegram");
-      const posts = (await (await fetch("/api/telegram")).json()).posts;
-      if (!posts.length) {
-        box.innerHTML = `<p class="hint">Постов нет. Выгрузите канал: ` +
-          `<code>uv run python -m bot.analyzer.telegram_reader --channel …</code></p>`;
-        return;
-      }
-      box.innerHTML = posts.map((p) => {
-        const views = p.views.map((v) =>
-          `<span class="bias ${v.bias}">${v.symbol} ${v.bias} (${v.horizon})</span>`).join("");
-        const summary = p.summary === null ? `<span class="hint">не разобран</span>`
-          : `${views}${escapeHtml(p.summary)}`;
-        return `<div class="post"><div class="meta">${when(p.time)} · ${escapeHtml(p.channel)}` +
-          ` #${p.post_id}</div><div class="text">${escapeHtml(p.text)}</div>` +
-          `<div>ИИ: ${summary}</div></div>`;
-      }).join("");
-    }
-
-    // Вкладка «Бот»: состояние живого бота (paper / demo) и аварийная остановка
-    const num = (x, d = 2) => (x === null || x === undefined ? "—" : Number(x).toFixed(d));
-    function tradeTable(rows, closed) {
-      if (!rows.length) return `<p class="hint">нет</p>`;
-      const head = closed ? "<th>Выход</th><th>Причина</th><th>Результат</th>"
-        : "<th>Стоп</th><th>Тейк</th><th>Свечей</th>";
-      return `<table><thead><tr><th>Сигнал</th><th>Сторона</th><th>Объём</th><th>Вход</th>` +
-        `${head}<th>Статус</th></tr></thead><tbody>` + rows.map((t) => {
-          const tail = closed
-            ? `<td>${num(t.exit_price)}</td><td>${t.exit_reason || "—"}</td>` +
-              `<td class="${(t.net_pnl || 0) >= 0 ? "win" : "loss"}">${num(t.net_pnl)}</td>`
-            : `<td>${num(t.stop)}</td><td>${num(t.take)}</td><td>${t.bars_held}</td>`;
-          return `<tr><td>${escapeHtml(t.signal_id)}</td><td>${t.side}</td><td>${t.qty}</td>` +
-            `<td>${num(t.entry_price)}</td>${tail}<td>${t.status}</td></tr>`;
-        }).join("") + "</tbody></table>";
-    }
-    async function loadBot() {
-      const mode = document.getElementById("b-mode").value;
-      const d = await (await fetch("/api/bot?mode=" + mode)).json();
-      const r = d.risk;
-      let state = r
-        ? `Капитал <b>${num(r.equity)}</b>, пик ${num(r.peak_equity)}, ` +
-          `начало дня ${num(r.day_start_equity)}, убытков подряд ${r.loss_streak}`
-        : `<span class="hint">бот в режиме ${mode} ещё не запускался ` +
-          `(<code>uv run python -m bot.runner.live --mode ${mode}</code>)</span>`;
-      if (d.kill) state += ` · <span class="loss">ОСТАНОВЛЕН: ${escapeHtml(d.kill)}</span>`;
-      else if (d.kill_file) state += ` · <span class="loss">остановка запрошена</span>`;
-      if (r && r.halted) state += ` · <span class="loss">${escapeHtml(r.halted)}</span>`;
-      if (r && r.paused) state += ` · <span class="lvl-warning">пауза: ${escapeHtml(r.paused)}</span>`;
-      document.getElementById("b-state").innerHTML = state;
-      document.getElementById("b-open").innerHTML = tradeTable(d.trades, false);
-      document.getElementById("b-closed").innerHTML = tradeTable(d.closed, true);
-      document.getElementById("b-events").innerHTML = d.events.length
-        ? d.events.map((e) => `<div class="lvl-${e.level}">${e.time.slice(0, 19).replace("T", " ")}` +
-            ` · ${e.kind} · ${escapeHtml(e.message)}</div>`).join("")
-        : `<p class="hint">нет</p>`;
-    }
-    document.getElementById("b-mode").onchange = loadBot;
-    document.getElementById("b-kill").onclick = async () => {
-      if (!confirm("Закрыть все позиции и остановить торговлю?")) return;
-      const d = await (await fetch("/api/bot/kill", { method: "POST" })).json();
-      document.getElementById("b-msg").textContent = d.status;
-      loadBot();
-    };
-    document.getElementById("b-resume").onclick = async () => {
-      const d = await (await fetch("/api/bot/resume", { method: "POST" })).json();
-      document.getElementById("b-msg").textContent = d.status;
-    };
-    setInterval(() => {
-      if (document.getElementById("tab-bot").classList.contains("active")) loadBot();
-    }, 10000);
-
-    // Запуск бэктеста из интерфейса
-    let catalog = [];
-    const rStrategy = document.getElementById("r-strategy");
-    const rStatus = document.getElementById("r-status");
-
-    function renderParams() {
-      const strategy = catalog.find((c) => c.name === rStrategy.value);
-      document.getElementById("r-params").innerHTML = Object.entries(strategy.params).map(
-        ([k, v]) => `<label>${k} <input name="${k}" value="${v}"></label>`).join("");
-    }
-
-    function parseValue(text) {
-      if (text === "true" || text === "false") return text === "true";
-      if (text === "null" || text === "") return null;
-      const n = Number(text);
-      return Number.isNaN(n) ? text : n;
-    }
-
-    async function refreshBacktests(selectId = null) {
-      const list = (await (await fetch("/api/backtests")).json()).backtests;
-      backtestSel.innerHTML = `<option value="">—</option>` + list.map((b) =>
-        `<option value="${b.id}">${b.created} ${b.strategy} ${b.symbol} ${b.timeframe}</option>`
-      ).join("");
-      if (selectId) { backtestSel.value = selectId; chooseBacktest(); }
-    }
-
-    document.getElementById("runform").onsubmit = async (event) => {
-      event.preventDefault();
-      const params = {};
-      document.querySelectorAll("#r-params input").forEach((i) => params[i.name] = parseValue(i.value));
-      const body = { strategy: rStrategy.value, symbol: document.getElementById("r-symbol").value,
-                     timeframe: document.getElementById("r-timeframe").value,
-                     start: document.getElementById("r-start").value,
-                     end: document.getElementById("r-end").value, params };
-      const response = await fetch("/api/backtests/run", { method: "POST",
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const data = await response.json();
-      if (!response.ok) { rStatus.textContent = "ошибка: " + data.detail; return; }
-      rStatus.textContent = "идёт бэктест…";
-      const started = Date.now();
-      const timer = setInterval(async () => {
-        const job = await (await fetch("/api/jobs/" + data.job_id)).json();
-        if (job.status === "running") {
-          rStatus.textContent = `идёт бэктест… ${Math.round((Date.now() - started) / 1000)} с`;
-          return;
+    $("legend").innerHTML = legend.join("");
+    for (const [name, list] of Object.entries(byPane)) {
+      const el = document.createElement("div");
+      el.className = "pane";
+      el.innerHTML = `<div class="pane-title">${esc(name)}</div>`;
+      $("charts").appendChild(el);
+      const opts = chartOptions({
+        timeScale: { visible: false }, handleScroll: false, handleScale: false,
+        crosshair: { horzLine: { visible: true } } });
+      // Логотип TradingView — на основном графике и ссылка внизу страницы
+      opts.layout = { ...opts.layout, attributionLogo: false };
+      const c = LightweightCharts.createChart(el, opts);
+      const pane = { chart: c, el, series: [] };
+      for (const s of list) {
+        const line = lineSeries(c, s);
+        line.setData(seriesData(rows, s.values));
+        for (const level of s.levels || []) {
+          line.createPriceLine({ price: level, color: "#8b949e", lineWidth: 1, lineStyle: 2,
+                                 axisLabelVisible: true, title: "" });
         }
-        clearInterval(timer);
-        if (job.status === "error") { rStatus.textContent = "ошибка: " + job.error; return; }
-        rStatus.textContent = "готово";
-        await refreshBacktests(job.backtest_id);
-      }, 1000);
-    };
+        pane.series.push(line);
+      }
+      panes.push(pane);
+    }
+    const range = chart.timeScale().getVisibleLogicalRange();
+    if (range) panes.forEach((p) => p.chart.timeScale().setVisibleLogicalRange(range));
+  }
 
-    (async () => {
-      const meta = await (await fetch("/api/symbols")).json();
-      symbolSel.innerHTML = meta.symbols.map((s) => `<option>${s}</option>`).join("");
-      tfSel.innerHTML = meta.timeframes.map((t) => `<option>${t}</option>`).join("");
-      tfSel.value = "1h";
+  let reloadTimer = null;
+  let loadSeq = 0;
+  async function loadChart(v, opts = {}) {
+    const seq = ++loadSeq;
+    const keep = opts.keepView ? chart.timeScale().getVisibleLogicalRange() : null;
+    if (!opts.keepView) $("w-status").textContent = "загрузка…";
+    const q = new URLSearchParams({ symbol: v.symbol, timeframe: v.tf, limit: 1000 });
+    if (opts.until) q.set("until", opts.until);
+    else if (v.range) { q.set("start", v.range.start); if (v.range.end) q.set("end", v.range.end); }
+    let data;
+    try {
+      if (v.strategy) {
+        q.set("strategy", v.strategy);
+        q.set("params", JSON.stringify(v.params));
+        data = await api("/api/strategy-chart?" + q);
+      } else {
+        data = await api("/api/candles?" + q);
+      }
+    } catch (e) { $("w-status").textContent = "ошибка: " + e.message; return; }
+    if (seq !== loadSeq) return;  // пока грузили, выбрали другое
+    const rows = data.candles;
+    candles.setData(rows.map((r) => ({ time: local(r.time), open: r.open, high: r.high,
+                                       low: r.low, close: r.close })));
+    const series = v.strategy ? data.series
+      : OVERVIEW_SERIES.map((s) => ({ ...s, values: rows.map((r) => r[s.column]) }));
+    drawIndicators(rows, series);
+    drawTrades(v, rows);
+    if (keep) chart.timeScale().setVisibleLogicalRange(keep);
+    else if (!opts.until) chart.timeScale().fitContent();
+    $("w-status").textContent = statusText(v, data, rows, opts.until);
+    showNoData(v, rows);
+    clearTimeout(reloadTimer);
+    if (!opts.until && !v.range && app.views[app.tab] === v) {
+      reloadTimer = setTimeout(() => { if (app.views[app.tab] === v && !v.trade) loadChart(v, { keepView: true }); },
+                               data.refreshing ? 5000 : 60000);
+    }
+    return rows;
+  }
+
+  function statusText(v, data, rows, until) {
+    if (!rows.length) return data.refreshing ? "загружаю свечи с Bybit…" : "нет свечей";
+    let text = `${rows.length} свечей`;
+    if (v.range && !until) text += ` за период`;
+    text += `, последняя минута ${data.last_minute ? when(data.last_minute) : "—"}`;
+    if (data.truncated) text += " · период обрезан до 20 000 свечей — возьмите таймфрейм крупнее";
+    const lag = data.last_minute ? Math.round((Date.now() / 1000 - data.last_minute) / 60) : 0;
+    if (data.refreshing) text += " · догружаю свежие свечи с Bybit…";
+    else if (data.refresh_error) text += ` · ${data.refresh_error}`;
+    else if (lag > 3 && !until && !v.range) text += ` · отстаёт на ${lag} мин`;
+    return text;
+  }
+
+  function showNoData(v, rows) {
+    const box = $("nodata");
+    if (rows.length && !(v.range && rows.length < 3)) { box.style.display = "none"; return; }
+    const period = v.range ? `за ${$("w-from").value} — ${$("w-to").value || "сейчас"}` : "";
+    box.style.display = "block";
+    box.innerHTML = `Нет свечей ${esc(v.symbol)} ${esc(period)}. ` +
+      `<button id="nd-load">Загрузить с Bybit</button> <span id="nd-msg"></span>`;
+    $("nd-load").onclick = async () => {
+      const from = v.range ? $("w-from").value : new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+      const to = v.range ? ($("w-to").value || null) : null;
+      try {
+        const { job_id } = await api("/api/data/download", { method: "POST",
+          body: { symbols: [v.symbol], start: from, end: to } });
+        const job = await watchJob(job_id, (j) => { $("nd-msg").textContent = (j.log || []).at(-1) || ""; });
+        $("nd-msg").textContent = job.status === "done" ? "готово" : "ошибка: " + job.error;
+        loadChart(v);
+      } catch (e) { $("nd-msg").textContent = "ошибка: " + e.message; }
+    };
+  }
+
+  // Маркеры входов и выходов сделок (бэктеста или paper-бота) на загруженных свечах
+  function drawTrades(v, rows) {
+    priceLines.forEach((l) => candles.removePriceLine(l));
+    priceLines = [];
+    const src = v.source;
+    if (!src || src.symbol !== v.symbol || !rows.length) { candles.setMarkers([]); return; }
+    const step = TF_SECONDS[v.tf];
+    const first = rows[0].time, last = rows.at(-1).time + step;
+    const bar = (t) => local(Math.floor(t / step) * step);
+    const markers = [];
+    for (const t of src.trades) {
+      const long = t.side === "LONG";
+      const chosen = t.number === v.trade;
+      if (t.entry_time && t.entry_time >= first && t.entry_time < last) {
+        markers.push({ time: bar(t.entry_time), position: long ? "belowBar" : "aboveBar",
+          shape: long ? "arrowUp" : "arrowDown", color: long ? "#1a7f37" : "#cf222e",
+          text: chosen ? `#${t.number} вход` : `#${t.number}` });
+      }
+      if (t.exit_time && t.exit_time >= first && t.exit_time < last) {
+        const good = (t.net_pnl ?? 0) >= 0;
+        const result = t.r_multiple !== null && t.r_multiple !== undefined
+          ? `${t.r_multiple.toFixed(2)}R` : `${fmt(t.net_pnl, 2)}$`;
+        markers.push({ time: bar(t.exit_time), position: long ? "aboveBar" : "belowBar",
+          shape: "circle", color: good ? "#1a7f37" : "#cf222e", text: `${t.exit_reason || ""} ${result}` });
+      }
+    }
+    markers.sort((a, b) => a.time - b.time);
+    candles.setMarkers(markers);
+    const t = src.trades.find((x) => x.number === v.trade);
+    if (!t) return;
+    const add = (price, color, title, style = 2) => {
+      if (price !== null && price !== undefined) {
+        priceLines.push(candles.createPriceLine({ price, color, title, lineWidth: 1,
+                                                  lineStyle: style, axisLabelVisible: true }));
+      }
+    };
+    add(t.entry_price, "#4a90e2", "вход", 0);
+    add(t.initial_stop, "#cf222e", "стоп");
+    if (t.stop !== t.initial_stop) add(t.stop, "#fb8f44", "стоп (трейлинг)");
+    add(t.take, "#1a7f37", "тейк");
+  }
+
+  async function showTrade(v, number) {
+    v.trade = number;
+    renderTradesTable(v);
+    const t = v.source && v.source.trades.find((x) => x.number === number);
+    if (!t) { $("tradeinfo").textContent = ""; loadChart(v); return; }
+    const result = t.r_multiple !== null && t.r_multiple !== undefined
+      ? `${t.r_multiple.toFixed(2)}R, ` : "";
+    $("tradeinfo").innerHTML = `<b>#${t.number} ${t.side}</b> вход ${when(t.entry_time)} по ` +
+      `${fmt(t.entry_price)}, стоп ${fmt(t.initial_stop)}, тейк ${fmt(t.take)}; ` +
+      `выход ${when(t.exit_time)} по ${fmt(t.exit_price)} (${esc(t.exit_reason || "открыта")}), ` +
+      `<b>${result}${fmt(t.net_pnl, 2)} USDT</b>` + (t.reason ? ` · ${esc(t.reason)}` : "");
+    const step = TF_SECONDS[v.tf];
+    const end = (t.exit_time ?? Math.floor(Date.now() / 1000));
+    await loadChart(v, { until: end + 60 * step });
+    chart.timeScale().setVisibleRange({ from: local(t.entry_time) - 60 * step,
+                                        to: local(end) + 60 * step });
+  }
+
+  // ===================== рабочая область вкладки =====================
+  function showView(v) {
+    $("w-symbol").innerHTML = app.symbols.map((s) => `<option>${esc(s)}</option>`).join("");
+    if (!app.symbols.includes(v.symbol)) v.symbol = app.symbols[0];
+    $("w-symbol").value = v.symbol;
+    $("w-tf").value = v.tf;
+    $("w-from").value = v.range ? v.range.fromText : "";
+    $("w-to").value = v.range ? v.range.toText : "";
+    $("tradeinfo").textContent = "";
+    const subs = v.strategy
+      ? [["backtest", "Бэктест"], ["trades", "Сделки"], ["equity", "Капитал"], ["report", "Отчёт"],
+         ["bots", "Paper-боты"], ["about", "Описание"]]
+      : [["backtest", "Бэктесты"], ["trades", "Сделки"], ["equity", "Капитал"], ["report", "Отчёт"]];
+    if (v.sub === "backtests" || !subs.some(([k]) => k === v.sub)) v.sub = "backtest";
+    $("subtabs").innerHTML = subs.map(([k, t]) =>
+      `<button data-sub="${k}" class="${v.sub === k ? "active" : ""}">${t}</button>`).join("");
+    $("subtabs").querySelectorAll("button").forEach((b) => b.onclick = () => openSub(v, b.dataset.sub));
+    openSub(v, v.sub);
+    renderTradesTable(v);
+    renderReport(v);
+    if (v.trade && v.source) showTrade(v, v.trade);
+    else loadChart(v);
+  }
+
+  function openSub(v, sub) {
+    v.sub = sub;
+    $("subtabs").querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.sub === sub));
+    document.querySelectorAll("#panel .sub").forEach((el) => el.classList.toggle("active", el.id === "sub-" + sub));
+    if (sub === "backtest") renderBacktestTab(v);
+    if (sub === "bots") renderStrategyBots(v);
+    if (sub === "about") renderAbout(v);
+    if (sub === "equity") requestAnimationFrame(() => equityChart.timeScale().fitContent());
+  }
+
+  $("w-symbol").onchange = () => { const v = view(app.tab); v.symbol = $("w-symbol").value; v.trade = null; $("tradeinfo").textContent = ""; loadChart(v); };
+  $("w-tf").onchange = () => { const v = view(app.tab); v.tf = $("w-tf").value; v.trade ? showTrade(v, v.trade) : loadChart(v); };
+  $("w-show").onclick = () => {
+    const v = view(app.tab);
+    const from = $("w-from").value, to = $("w-to").value;
+    if (!from) { $("w-status").textContent = "укажите дату «с»"; return; }
+    if (to && to < from) { $("w-status").textContent = "дата «по» раньше даты «с»"; return; }
+    v.range = { start: utcDay(from), end: to ? utcDay(to) + 86400 : null, fromText: from, toText: to };
+    v.trade = null; $("tradeinfo").textContent = "";
+    loadChart(v);
+  };
+  $("w-live").onclick = () => {
+    const v = view(app.tab);
+    v.range = null; v.trade = null; $("w-from").value = ""; $("w-to").value = "";
+    $("tradeinfo").textContent = ""; renderTradesTable(v); loadChart(v);
+  };
+  $("w-refresh").onclick = () => { const v = view(app.tab); v.trade = null; $("tradeinfo").textContent = ""; renderTradesTable(v); loadChart(v); };
+
+  // ---------- Бэктест ----------
+  function paramsForm(v, id) {
+    return `<div class="row params" id="${id}">` + Object.entries(v.params).map(([k, val]) =>
+      `<label>${esc(k)} <input name="${esc(k)}" value="${esc(val)}"></label>`).join("") + `</div>`;
+  }
+  function readParams(id) {
+    const out = {};
+    document.querySelectorAll(`#${id} input`).forEach((i) => out[i.name] = parseValue(i.value));
+    return out;
+  }
+
+  function renderBacktestTab(v) {
+    const box = $("sub-backtest");
+    const list = app.backtests.filter((b) => !v.strategy || b.strategy === v.strategy);
+    const rows = list.map((b) => `<tr class="click${v.source && v.source.id === b.id ? " selected" : ""}" data-id="${esc(b.id)}">` +
+      `<td>${esc(b.created)}</td><td>${esc(b.strategy)}</td><td>${esc(b.symbol)}</td><td>${esc(b.timeframe)}</td></tr>`).join("");
+    const table = list.length
+      ? `<table><thead><tr><th>Создан (UTC)</th><th>Стратегия</th><th>Символ</th><th>ТФ</th></tr></thead><tbody>${rows}</tbody></table>`
+      : `<p class="hint">Бэктестов пока нет.</p>`;
+    if (!v.strategy) {
+      box.innerHTML = `<p class="hint">Все бэктесты. Запускать — на вкладке нужной стратегии.</p>${table}`;
+    } else {
+      const defFrom = v.btFrom || "2021-01-01", defTo = v.btTo || "2024-06-30";
+      box.innerHTML = `
+        <div class="row">
+          <span>Символ и таймфрейм — как на графике: <b>${esc(v.symbol)} ${esc(v.tf)}</b></span>
+          <label>С <input id="bt-from" type="date" value="${defFrom}"></label>
+          <label>по <input id="bt-to" type="date" value="${defTo}"></label>
+          <label title="Перед бэктестом догрузить с Bybit недостающие свечи и funding за период">
+            <input id="bt-download" type="checkbox" checked> догрузить данные</label>
+          <button id="bt-run" class="primary">Запустить бэктест</button>
+          <button id="bt-apply" title="Перерисовать индикаторы на графике с этими параметрами">Параметры → график</button>
+          <button id="bt-reset">Параметры по умолчанию</button>
+        </div>
+        <div class="hint">Параметры стратегии (те же, что <code>--param</code> в терминале):</div>
+        ${paramsForm(v, "bt-params")}
+        <p class="hint">In-sample — 2021-01-01 … 2024-06-30, validation — 2024-07-01 … 2025-06-30,
+          hold-out — 2025-07-01 … 2026-09-30 (его смотрят один раз; интерфейс спросит подтверждение).</p>
+        <div class="log" id="bt-log">${esc(v.jobLog || "")}</div>
+        <h4>Бэктесты этой стратегии</h4>${table}`;
+      $("bt-run").onclick = () => runBacktest(v, false);
+      $("bt-apply").onclick = () => { v.params = readParams("bt-params"); loadChart(v, { keepView: true }); };
+      $("bt-reset").onclick = () => {
+        v.params = { ...app.strategies.find((s) => s.name === v.strategy).params };
+        renderBacktestTab(v); loadChart(v, { keepView: true });
+      };
+      $("bt-from").onchange = () => v.btFrom = $("bt-from").value;
+      $("bt-to").onchange = () => v.btTo = $("bt-to").value;
+    }
+    box.querySelectorAll("tr.click").forEach((tr) => tr.onclick = () => chooseBacktest(v, tr.dataset.id));
+  }
+
+  async function runBacktest(v, allowHoldout) {
+    v.params = readParams("bt-params");
+    const body = { strategy: v.strategy, symbol: v.symbol, timeframe: v.tf,
+      start: $("bt-from").value, end: $("bt-to").value, params: v.params,
+      download: $("bt-download").checked, allow_holdout: allowHoldout };
+    const log = (text) => { v.jobLog = text; const el = $("bt-log"); if (el && app.views[app.tab] === v) el.textContent = text; };
+    let started;
+    try {
+      started = await api("/api/backtests/run", { method: "POST", body });
+    } catch (e) {
+      if (e.status === 409 && e.detail && e.detail.holdout) {
+        if (confirm(e.message + "\n\nЗапустить всё равно?")) return runBacktest(v, true);
+        log("отменено: период задевает hold-out");
+        return;
+      }
+      log("ошибка: " + e.message);
+      return;
+    }
+    $("bt-run").disabled = true;
+    const job = await watchJob(started.job_id, (j) => log(jobText(j)));
+    if ($("bt-run")) $("bt-run").disabled = false;
+    if (job.status === "done") {
       await refreshBacktests();
-      const strategies = await (await fetch("/api/strategies")).json();
-      catalog = strategies.strategies.filter((c) => c.name !== "random_entry")
-        .concat(strategies.strategies.filter((c) => c.name === "random_entry"));
-      rStrategy.innerHTML = catalog.map((c) => `<option>${c.name}</option>`).join("");
-      document.getElementById("r-symbol").innerHTML =
-        strategies.symbols.map((x) => `<option>${x}</option>`).join("");
-      document.getElementById("r-timeframe").innerHTML = strategies.timeframes
-        .map((x) => `<option${x === "1h" ? " selected" : ""}>${x}</option>`).join("");
-      rStrategy.onchange = renderParams;
-      renderParams();
-      symbolSel.onchange = tfSel.onchange = () => (selectedTrade() ? showTrade() : load());
-      document.getElementById("refresh").onclick = () => {
-        tradeSel.value = ""; info.textContent = ""; markRow(); load();
-      };
-      backtestSel.onchange = chooseBacktest;
-      tradeSel.onchange = showTrade;
-      load();
-    })();
+      await chooseBacktest(v, job.backtest_id);
+    }
+  }
+
+  async function refreshBacktests() {
+    app.backtests = (await api("/api/backtests")).backtests;
+  }
+
+  async function chooseBacktest(v, id) {
+    const data = await api("/api/backtests/" + encodeURIComponent(id));
+    v.source = { type: "backtest", id, symbol: data.symbol, title: id, trades: data.trades };
+    v.symbol = data.symbol;
+    if (TF_SECONDS[data.timeframe]) v.tf = data.timeframe;
+    $("w-symbol").value = v.symbol; $("w-tf").value = v.tf;
+    renderBacktestTab(v);
+    renderTradesTable(v);
+    loadEquity(id);
+    renderReport(v);
+    if (data.trades.length) { openSub(v, "trades"); showTrade(v, data.trades[0].number); }
+    else { v.trade = null; $("tradeinfo").textContent = "в бэктесте нет сделок"; loadChart(v); }
+  }
+
+  // ---------- Сделки, капитал, отчёт ----------
+  function renderTradesTable(v) {
+    const box = $("sub-trades");
+    const src = v.source;
+    if (!src) { box.innerHTML = `<p class="hint">Выберите бэктест или paper-бота.</p>`; return; }
+    if (!src.trades.length) { box.innerHTML = `<p class="hint">${esc(src.title)}: сделок нет.</p>`; return; }
+    const rows = src.trades.map((t) => {
+      const good = (t.net_pnl ?? 0) >= 0 ? "win" : "loss";
+      const r = t.r_multiple !== null && t.r_multiple !== undefined ? t.r_multiple.toFixed(2) : "—";
+      return `<tr class="click${t.number === v.trade ? " selected" : ""}" data-n="${t.number}"><td>${t.number}</td><td>${t.side}</td>` +
+        `<td>${when(t.entry_time)}</td><td class="num">${fmt(t.entry_price)}</td>` +
+        `<td>${when(t.exit_time)}</td><td class="num">${fmt(t.exit_price)}</td>` +
+        `<td>${esc(t.exit_reason || t.status || "")}</td><td class="num ${good}">${r}</td>` +
+        `<td class="num ${good}">${fmt(t.net_pnl, 2)}</td></tr>`;
+    }).join("");
+    box.innerHTML = `<div class="hint">${esc(src.type === "bot" ? "Paper-бот " : "Бэктест ")}${esc(src.title)}</div>` +
+      `<table><thead><tr><th>#</th><th>Сторона</th><th>Вход</th><th class="num">Цена</th>` +
+      `<th>Выход</th><th class="num">Цена</th><th>Причина</th><th class="num">R</th><th class="num">USDT</th></tr></thead>` +
+      `<tbody>${rows}</tbody></table>`;
+    box.querySelectorAll("tr.click").forEach((tr) => tr.onclick = () => showTrade(v, Number(tr.dataset.n)));
+  }
+
+  const equityChart = LightweightCharts.createChart($("equity"), chartOptions({
+    grid: { vertLines: { visible: false }, horzLines: { color: dark ? "#21262d" : "#eef1f4" } } }));
+  const equityLine = equityChart.addLineSeries({ color: "#4a90e2", lineWidth: 2 });
+  async function loadEquity(id) {
+    const eq = await api(`/api/backtests/${encodeURIComponent(id)}/equity`);
+    equityLine.setData(eq.equity.map((p) => ({ time: local(p.time), value: p.value })));
+    equityChart.timeScale().fitContent();
+  }
+
+  async function renderReport(v) {
+    const box = $("sub-report");
+    if (!v.source || v.source.type !== "backtest") {
+      box.innerHTML = `<p class="hint">Выберите бэктест.</p>`;
+      if (!v.source) equityLine.setData([]);
+      return;
+    }
+    const id = v.source.id;
+    const files = ["report.md", "trades.jsonl", "run.json", "skipped.jsonl", "trades.csv", "equity.csv"];
+    const links = files.map((f) => `<a href="/api/backtests/${encodeURIComponent(id)}/files/${f}">${f}</a>`).join(" · ");
+    const rep = await api(`/api/backtests/${encodeURIComponent(id)}/report`);
+    box.innerHTML = `<div class="row"><span>Файлы для разбора (их можно отдать ИИ на проверку): ${links}</span></div>` +
+      `<pre class="report">${esc(rep.report || "Отчёта нет.")}</pre>`;
+  }
+
+  function renderAbout(v) {
+    const s = app.strategies.find((x) => x.name === v.strategy);
+    $("sub-about").innerHTML = `<h3>${esc(STRATEGY_TITLES[s.name] || s.name)} <span class="hint">v${esc(s.version)}</span></h3>` +
+      `<pre class="report">${esc(s.description)}</pre>` +
+      `<h4>Индикаторы на графике</h4><ul>${s.indicators.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` +
+      `<p class="hint">Индикаторы считаются тем же кодом стратегии (prepare), что в бэктесте и у бота.</p>`;
+  }
+
+  // ---------- Paper-боты стратегии ----------
+  async function refreshBots() {
+    try { app.bots = (await api("/api/bots")).bots; } catch (e) { app.bots = []; }
+    renderNav();
+  }
+
+  function botRow(b, withStrategy) {
+    const badge = `<span class="badge ${b.state}">${{ running: "работает", starting: "запускается", stopped: "остановлен", error: "ошибка" }[b.state] || b.state}</span>`;
+    const pnl = b.closed_pnl >= 0 ? "win" : "loss";
+    const buttons = [
+      b.state === "running" || b.state === "starting"
+        ? `<button data-act="stop">Стоп</button>` : `<button data-act="start">Старт</button>`,
+      b.state === "running" ? (b.kill ? `<button data-act="resume">Возобновить</button>`
+        : `<button data-act="kill" class="danger" title="Закрыть позиции и не открывать новых">Аварийно</button>`) : "",
+      `<button data-act="show">На графике</button>`,
+      withStrategy ? `<button data-act="detail">Подробно</button>` : "",
+      b.state !== "running" ? `<button data-act="delete" title="Убрать из списка (сделки и журнал останутся)">Удалить</button>` : "",
+    ].join(" ");
+    return `<tr data-id="${esc(b.id)}"><td>${esc(b.id)}</td>${withStrategy ? `<td>${esc(b.strategy)}</td>` : ""}` +
+      `<td>${esc(b.symbol)} ${esc(b.timeframe)}</td><td>${badge}${b.error ? ` <span class="loss">${esc(b.error)}</span>` : ""}` +
+      `${b.kill ? ` <span class="loss">остановлен: ${esc(b.kill)}</span>` : ""}</td>` +
+      `<td class="num">${num(b.equity)}</td><td class="num">${b.open_trades}</td>` +
+      `<td class="num">${b.closed_trades}</td><td class="num ${pnl}">${num(b.closed_pnl)}</td><td>${buttons}</td></tr>`;
+  }
+  function botTable(list, withStrategy) {
+    if (!list.length) return `<p class="hint">Ботов нет.</p>`;
+    return `<table><thead><tr><th>Бот</th>${withStrategy ? "<th>Стратегия</th>" : ""}<th>Символ</th><th>Состояние</th>` +
+      `<th class="num">Капитал</th><th class="num">Открыто</th><th class="num">Закрыто</th><th class="num">Итог, USDT</th><th></th></tr></thead>` +
+      `<tbody>${list.map((b) => botRow(b, withStrategy)).join("")}</tbody></table>`;
+  }
+  function bindBotButtons(box, after) {
+    box.querySelectorAll("button[data-act]").forEach((btn) => btn.onclick = async () => {
+      const id = btn.closest("tr").dataset.id, act = btn.dataset.act;
+      try {
+        if (act === "show") return showBotTrades(id);
+        if (act === "detail") return renderBotDetail(id);
+        if (act === "kill" && !confirm("Закрыть виртуальные позиции бота и остановить торговлю?")) return;
+        if (act === "delete" && !confirm(`Убрать бота ${id} из списка?`)) return;
+        await api(`/api/bots/${encodeURIComponent(id)}${act === "delete" ? "" : "/" + act}`,
+                  { method: act === "delete" ? "DELETE" : "POST" });
+      } catch (e) { alert(e.message); }
+      await refreshBots(); after();
+    });
+  }
+
+  function botTrades(detail) {
+    const rows = [...detail.status.closed].reverse().concat(detail.status.trades);
+    const sec = (s) => s ? Math.floor(Date.parse(s) / 1000) : null;
+    return rows.map((t, i) => ({
+      number: i + 1, side: t.side, entry_time: sec(t.opened_at), exit_time: sec(t.exit_time),
+      entry_price: t.entry_price, exit_price: t.exit_price, initial_stop: t.stop, stop: t.stop,
+      take: t.take, exit_reason: t.exit_reason, status: t.status, r_multiple: null, net_pnl: t.net_pnl,
+    }));
+  }
+
+  async function showBotTrades(id) {
+    const detail = await api(`/api/bots/${encodeURIComponent(id)}`);
+    let key = detail.strategy;
+    if (!app.strategies.some((s) => s.name === key)) key = "overview";
+    const v = view(key);
+    v.source = { type: "bot", id, symbol: detail.symbol, title: id, trades: botTrades(detail) };
+    v.symbol = detail.symbol; v.tf = detail.timeframe; v.params = { ...detail.params };
+    v.trade = null; v.range = null; v.sub = "trades";
+    openTab(key);
+  }
+
+  function renderStrategyBots(v) {
+    const box = $("sub-bots");
+    const list = app.bots.filter((b) => b.strategy === v.strategy);
+    box.innerHTML = `
+      <div class="card"><div class="row">
+        <b>Новый paper-бот</b>
+        <span>${esc(v.symbol)} ${esc(v.tf)} (как на графике), параметры — как во вкладке «Бэктест»</span>
+        <label>Капитал, USDT <input id="nb-capital" type="number" value="10000" min="100" step="100" style="width:8em"></label>
+        <button id="nb-start" class="primary">Создать и запустить</button>
+        <span id="nb-msg" class="hint"></span>
+      </div>
+      <div class="hint">Виртуальные сделки по живым ценам Bybit с тем же риск-менеджером, что в бэктесте.
+        Каждый бот — свой счёт. Боты работают, пока открыт веб-интерфейс (окно терминала с ним),
+        и сами запускаются при следующем старте интерфейса.</div></div>
+      <div id="sb-table">${botTable(list, false)}</div>
+      <div id="sb-detail"></div>`;
+    $("nb-start").onclick = async () => {
+      const params = document.getElementById("bt-params") ? readParams("bt-params") : v.params;
+      try {
+        const { id } = await api("/api/bots", { method: "POST", body: { strategy: v.strategy,
+          symbol: v.symbol, timeframe: v.tf, params, capital: Number($("nb-capital").value) } });
+        $("nb-msg").textContent = `бот ${id} запускается: загружаю историю для индикаторов…`;
+      } catch (e) { $("nb-msg").textContent = "ошибка: " + e.message; }
+      await refreshBots(); renderStrategyBots(v);
+    };
+    bindBotButtons(box, () => renderStrategyBots(v));
+  }
+
+  // ===================== страница «Боты» =====================
+  async function renderBotsPage() {
+    const box = $("page-bots");
+    await refreshBots();
+    box.innerHTML = `
+      <h3>Paper-боты интерфейса</h3>
+      <div class="row"><button id="all-kill" class="danger">Аварийная остановка всего</button>
+        <button id="all-resume">Возобновить бота из терминала</button><span id="all-msg" class="hint"></span></div>
+      <p class="hint">Аварийная остановка закрывает позиции всех paper-ботов интерфейса и бота,
+        запущенного командой <code>bot.runner.live</code> (через файл data/KILL).
+        Создать бота — на вкладке стратегии, «Paper-боты».</p>
+      <div id="bp-table">${botTable(app.bots, true)}</div>
+      <div id="bp-detail"></div>
+      <h3>Бот из терминала (config/live.yaml)</h3>
+      <div class="row"><label>Режим <select id="b-mode"><option>paper</option><option>demo</option><option>live</option></select></label>
+        <span class="hint">запуск: вкладка «Команды» → «Бот из config/live.yaml» или терминал</span></div>
+      <div id="b-state"></div>
+      <h4>Открытые сделки</h4><div id="b-open"></div>
+      <h4>Закрытые сделки</h4><div id="b-closed"></div>
+      <h4>События</h4><div id="b-events"></div>`;
+    bindBotButtons($("bp-table"), renderBotsPage);
+    $("all-kill").onclick = async () => {
+      if (!confirm("Закрыть все позиции всех ботов и остановить торговлю?")) return;
+      $("all-msg").textContent = (await api("/api/bot/kill", { method: "POST" })).status;
+      renderBotsPage();
+    };
+    $("all-resume").onclick = async () => {
+      $("all-msg").textContent = (await api("/api/bot/resume", { method: "POST" })).status;
+    };
+    $("b-mode").onchange = loadCliBot;
+    loadCliBot();
+  }
+
+  function tradeTable(rows, closed) {
+    if (!rows.length) return `<p class="hint">нет</p>`;
+    const head = closed ? "<th>Выход</th><th>Причина</th><th class='num'>Результат</th>"
+      : "<th class='num'>Стоп</th><th class='num'>Тейк</th><th class='num'>Свечей</th>";
+    return `<table><thead><tr><th>Сигнал</th><th>Сторона</th><th class="num">Объём</th><th class="num">Вход</th>` +
+      `${head}<th>Статус</th></tr></thead><tbody>` + rows.map((t) => {
+        const tail = closed
+          ? `<td>${num(t.exit_price)}</td><td>${esc(t.exit_reason || "—")}</td>` +
+            `<td class="num ${(t.net_pnl || 0) >= 0 ? "win" : "loss"}">${num(t.net_pnl)}</td>`
+          : `<td class="num">${num(t.stop)}</td><td class="num">${num(t.take)}</td><td class="num">${t.bars_held}</td>`;
+        return `<tr><td>${esc(t.signal_id)}</td><td>${t.side}</td><td class="num">${t.qty}</td>` +
+          `<td class="num">${num(t.entry_price)}</td>${tail}<td>${esc(t.status)}</td></tr>`;
+      }).join("") + "</tbody></table>";
+  }
+  function eventsList(events) {
+    return events.length ? events.map((e) => `<div class="lvl-${e.level}">${isoTime(e.time)}` +
+      ` · ${esc(e.kind)} · ${esc(e.message)}</div>`).join("") : `<p class="hint">нет</p>`;
+  }
+
+  async function renderBotDetail(id) {
+    const d = await api(`/api/bots/${encodeURIComponent(id)}`);
+    $("bp-detail").innerHTML = `<div class="card"><h4>${esc(id)}</h4>
+      <div class="hint">Параметры: ${esc(JSON.stringify(d.params))} · капитал ${num(d.capital)} ·
+        журнал <a href="/api/journals/${encodeURIComponent("paper-" + id + ".jsonl")}/download">paper-${esc(id)}.jsonl</a></div>
+      <h4>Открытые сделки</h4>${tradeTable(d.status.trades, false)}
+      <h4>Закрытые сделки</h4>${tradeTable(d.status.closed, true)}
+      <h4>События</h4>${eventsList(d.status.events)}</div>`;
+  }
+
+  async function loadCliBot() {
+    const mode = $("b-mode").value;
+    const d = await api("/api/bot?mode=" + mode);
+    const r = d.risk;
+    let state = r
+      ? `Капитал <b>${num(r.equity)}</b>, пик ${num(r.peak_equity)}, начало дня ${num(r.day_start_equity)}, убытков подряд ${r.loss_streak}`
+      : `<span class="hint">бот в режиме ${mode} ещё не запускался</span>`;
+    if (d.kill) state += ` · <span class="loss">ОСТАНОВЛЕН: ${esc(d.kill)}</span>`;
+    else if (d.kill_file) state += ` · <span class="loss">остановка запрошена</span>`;
+    if (r && r.halted) state += ` · <span class="loss">${esc(r.halted)}</span>`;
+    if (r && r.paused) state += ` · <span class="lvl-warning">пауза: ${esc(r.paused)}</span>`;
+    $("b-state").innerHTML = state;
+    $("b-open").innerHTML = tradeTable(d.trades, false);
+    $("b-closed").innerHTML = tradeTable(d.closed, true);
+    $("b-events").innerHTML = eventsList(d.events);
+  }
+
+  // ===================== страница «Данные» =====================
+  async function renderDataPage() {
+    const box = $("page-data");
+    const [cov, meta] = await Promise.all([api("/api/data/coverage"), api("/api/symbols")]);
+    const local = new Set(meta.local);
+    const rows = cov.coverage.map((c) => `<tr><td>${esc(c.symbol)}</td>` +
+      `<td>${c.first ? new Date(c.first * 1000).toISOString().slice(0, 16).replace("T", " ") : "—"}</td>` +
+      `<td>${c.last ? new Date(c.last * 1000).toISOString().slice(0, 16).replace("T", " ") : "—"}</td>` +
+      `<td>${local.has(c.symbol) ? `<button data-del="${esc(c.symbol)}">Убрать</button>` : `<span class="hint">из default.yaml</span>`}</td></tr>`).join("");
+    const today = new Date().toISOString().slice(0, 10);
+    box.innerHTML = `
+      <h3>Монеты</h3>
+      <div class="row"><label>Новая монета <input id="d-new" placeholder="например, SOL или SOLUSDT" style="width:16em"></label>
+        <button id="d-add" class="primary">Добавить</button><span id="d-add-msg" class="hint"></span></div>
+      <p class="hint">Монета проверяется на Bybit (бессрочный USDT-контракт). Шаги цены и объёма берутся с биржи
+        и сохраняются в <code>config/symbols.local.yaml</code>; проскальзывание для бэктеста — 0,1%.</p>
+      <table><thead><tr><th>Символ</th><th>1m-свечи с (UTC)</th><th>по (UTC)</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+      <h3>Загрузить историю с Bybit</h3>
+      <div class="row"><span>Монеты:</span><span class="checks">${app.symbols.map((s) =>
+        `<label><input type="checkbox" name="dl-sym" value="${esc(s)}"> ${esc(s)}</label>`).join("")}</span></div>
+      <div class="row"><label>С <input id="dl-from" type="date" value="2021-01-01"></label>
+        <label>по <input id="dl-to" type="date" value="${today}"></label>
+        <label><input id="dl-oi" type="checkbox"> и open interest</label>
+        <button id="dl-run" class="primary">Загрузить</button></div>
+      <p class="hint">Догружаются только пропуски: уже скачанное повторно не качается. Свечи 1m и funding;
+        3 года одной монеты — около 1500 запросов, несколько минут.</p>
+      <div class="log" id="dl-log"></div>`;
+    $("d-add").onclick = async () => {
+      $("d-add-msg").textContent = "проверяю на Bybit…";
+      try {
+        const r = await api("/api/symbols", { method: "POST", body: { symbol: $("d-new").value } });
+        $("d-add-msg").textContent = r.added ? `${r.symbol} добавлена: шаг цены ${r.tick_size}, шаг объёма ${r.qty_step}`
+          : `${r.symbol} уже есть`;
+        await loadMeta(); renderDataPage();
+      } catch (e) { $("d-add-msg").textContent = "ошибка: " + e.message; }
+    };
+    box.querySelectorAll("button[data-del]").forEach((b) => b.onclick = async () => {
+      if (!confirm(`Убрать ${b.dataset.del} из списка? Скачанные свечи останутся.`)) return;
+      try { await api("/api/symbols/" + b.dataset.del, { method: "DELETE" }); } catch (e) { alert(e.message); }
+      await loadMeta(); renderDataPage();
+    });
+    $("dl-run").onclick = async () => {
+      const symbols = [...box.querySelectorAll("input[name=dl-sym]:checked")].map((i) => i.value);
+      try {
+        const { job_id } = await api("/api/data/download", { method: "POST", body: { symbols,
+          start: $("dl-from").value, end: $("dl-to").value || null, open_interest: $("dl-oi").checked } });
+        $("dl-run").disabled = true;
+        const job = await watchJob(job_id, (j) => { $("dl-log").textContent = jobText(j); });
+        $("dl-run").disabled = false;
+        if (job.status === "done") renderDataPage();
+      } catch (e) { $("dl-log").textContent = "ошибка: " + e.message; }
+    };
+  }
+
+  // ===================== страница «Журналы» =====================
+  async function renderJournalsPage() {
+    const box = $("page-journals");
+    const data = await api("/api/journals");
+    const list = data.journals.map((j) => `<tr class="click" data-name="${esc(j.name)}"><td>${esc(j.name)}</td>` +
+      `<td class="num">${(j.size / 1024).toFixed(1)} КБ</td>` +
+      `<td><a href="/api/journals/${encodeURIComponent(j.name)}/download">скачать</a></td></tr>`).join("");
+    box.innerHTML = `
+      <h3>Журналы (JSON Lines)</h3>
+      <p class="hint">Одна строка — одно событие: сигнал с причиной и признаками, решение риск-менеджера,
+        ордер и ответ биржи, перенос стопа, закрытие с результатом. Папка: <code>${esc(data.dir || "logs/journal")}</code>.
+        Файл можно приложить к вопросу ИИ: «проверь сделки по журналу». Подробно — docs/LOGS.md.</p>
+      <p class="hint">Бэктесты: в папке каждого бэктеста <code>trades.jsonl</code>, <code>skipped.jsonl</code>, <code>run.json</code>
+        (ссылки — во вкладке «Отчёт»), список запусков — <code>backtests.jsonl</code>.
+        Вывод фоновых задач и команд — <code>logs/jobs/</code>.</p>
+      ${data.journals.length ? `<table><thead><tr><th>Журнал</th><th class="num">Размер</th><th></th></tr></thead><tbody>${list}</tbody></table>`
+        : `<p class="hint">Журналов пока нет: они появятся после первого бэктеста или запуска бота.</p>`}
+      <div id="j-view"></div>`;
+    box.querySelectorAll("tr.click").forEach((tr) => tr.onclick = () => showJournal(tr.dataset.name));
+  }
+
+  async function showJournal(name) {
+    const data = await api(`/api/journals/${encodeURIComponent(name)}?limit=300`);
+    const rows = data.records.slice().reverse().map((r) => {
+      const { time, kind, account, ...rest } = r;
+      return `<tr class="jrow"><td>${isoTime(time)}</td><td>${esc(kind)}</td><td>${esc(JSON.stringify(rest))}</td></tr>`;
+    }).join("");
+    $("j-view").innerHTML = `<h4>${esc(name)} — последние ${data.records.length} записей</h4>` +
+      `<table><thead><tr><th>Время (UTC)</th><th>Событие</th><th>Данные</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  // ===================== страница «Команды» =====================
+  let commands = [];
+  let commandId = null;
+  async function renderCommandsPage() {
+    const box = $("page-commands");
+    if (!commands.length) commands = (await api("/api/commands")).commands;
+    if (!commandId) commandId = commands[0].id;
+    let group = "";
+    const list = commands.map((c) => {
+      const head = c.group !== group ? `<div class="group">${esc(group = c.group)}</div>` : "";
+      return head + `<button data-id="${c.id}" class="${c.id === commandId ? "active" : ""}">${esc(c.title)}</button>`;
+    }).join("");
+    box.innerHTML = `<div class="cols"><div class="cmdlist">${list}</div><div id="cmd-form"></div></div>
+      <h4>Последние запуски</h4><div id="cmd-jobs"></div>`;
+    box.querySelectorAll(".cmdlist button").forEach((b) => b.onclick = () => { commandId = b.dataset.id; renderCommandsPage(); });
+    renderCommandForm(commands.find((c) => c.id === commandId));
+    renderCommandJobs();
+  }
+
+  function argInput(a) {
+    const id = "arg" + a.flag.replace(/[^a-z0-9]/gi, "_");
+    const def = a.default ?? "";
+    let input;
+    if (a.kind === "flag") input = `<input type="checkbox" id="${id}">`;
+    else if (a.kind === "choice") {
+      input = `<select id="${id}">${a.required ? "" : `<option value="">—</option>`}` +
+        a.choices.map((c) => `<option${c === def ? " selected" : ""}>${esc(c)}</option>`).join("") + `</select>`;
+    } else if (a.kind === "multi") {
+      input = `<span class="checks" id="${id}">` + a.choices.map((c) =>
+        `<label><input type="checkbox" value="${esc(c)}"> ${esc(c)}</label>`).join("") + `</span>`;
+    } else if (a.kind === "kv") {
+      input = `<textarea id="${id}" rows="2" cols="30" placeholder="ключ=значение, по строке"></textarea>`;
+    } else {
+      const type = a.kind === "date" ? "date" : (a.kind === "int" || a.kind === "float") ? "number" : "text";
+      input = `<input id="${id}" type="${type}" value="${esc(def)}"${a.kind === "float" ? ' step="any"' : ""}>`;
+    }
+    return `<div class="row"><label>${esc(a.label)}${a.required ? " *" : ""} ${input}</label>` +
+      `<span class="hint"><code>${esc(a.flag)}</code> ${esc(a.help || "")}</span></div>`;
+  }
+  function readArg(a) {
+    const el = $("arg" + a.flag.replace(/[^a-z0-9]/gi, "_"));
+    if (a.kind === "flag") return el.checked;
+    if (a.kind === "multi") return [...el.querySelectorAll("input:checked")].map((i) => i.value);
+    if (a.kind === "kv") return el.value.split("\n").map((x) => x.trim()).filter(Boolean);
+    return el.value;
+  }
+
+  function renderCommandForm(c) {
+    $("cmd-form").innerHTML = `<h3>${esc(c.title)}</h3><p class="hint">${esc(c.help || "")}</p>
+      <p><code>${esc(c.command)}</code></p>${c.args.map(argInput).join("")}
+      <div class="row"><button id="cmd-run" class="primary">Запустить</button>
+        <button id="cmd-stop" disabled>Остановить</button><span id="cmd-msg" class="hint"></span></div>
+      <div class="log" id="cmd-log"></div>`;
+    let running = null;
+    $("cmd-run").onclick = async () => {
+      const values = {};
+      for (const a of c.args) values[a.flag] = readArg(a);
+      try {
+        const { job_id } = await api(`/api/commands/${c.id}`, { method: "POST", body: { values } });
+        running = job_id;
+        $("cmd-stop").disabled = false; $("cmd-msg").textContent = "идёт…";
+        const job = await watchJob(job_id, (j) => {
+          const el = $("cmd-log"); if (el) { el.textContent = jobText(j); el.scrollTop = el.scrollHeight; }
+        });
+        if ($("cmd-msg")) {
+          $("cmd-msg").textContent = job.status === "done" ? "готово" : "ошибка: " + job.error;
+          $("cmd-stop").disabled = true;
+        }
+        renderCommandJobs();
+      } catch (e) { $("cmd-msg").textContent = "ошибка: " + e.message; }
+    };
+    $("cmd-stop").onclick = async () => {
+      if (running) { try { await api(`/api/jobs/${running}/stop`, { method: "POST" }); } catch (e) { alert(e.message); } }
+    };
+  }
+
+  async function renderCommandJobs() {
+    const jobs = (await api("/api/jobs")).jobs;
+    const box = $("cmd-jobs");
+    if (!box) return;
+    box.innerHTML = jobs.length ? `<table><thead><tr><th>Начало</th><th>Задача</th><th>Состояние</th><th></th></tr></thead><tbody>` +
+      jobs.map((j) => `<tr class="click" data-id="${j.job_id}"><td>${isoTime(j.started)}</td><td>${esc(j.title)}</td>` +
+        `<td class="${j.status === "error" ? "loss" : j.status === "done" ? "win" : "warn"}">${j.status}${j.error ? ": " + esc(j.error) : ""}</td>` +
+        `<td>${j.status === "running" && j.kind === "command" ? `<button data-stop="${j.job_id}">Остановить</button>` : ""}</td></tr>`).join("") +
+      `</tbody></table>` : `<p class="hint">Запусков пока нет.</p>`;
+    box.querySelectorAll("tr.click").forEach((tr) => tr.onclick = async (ev) => {
+      if (ev.target.dataset.stop) {
+        try { await api(`/api/jobs/${ev.target.dataset.stop}/stop`, { method: "POST" }); } catch (e) { alert(e.message); }
+        return renderCommandJobs();
+      }
+      const job = await api(`/api/jobs/${tr.dataset.id}?log=2000`);
+      $("cmd-log").textContent = jobText(job);
+    });
+  }
+
+  // ===================== Telegram =====================
+  async function renderTelegram() {
+    const box = $("page-telegram");
+    box.innerHTML = `<p class="hint">Загрузка…</p>`;
+    const posts = (await api("/api/telegram")).posts;
+    if (!posts.length) {
+      box.innerHTML = `<p class="hint">Постов нет. Выгрузите канал: вкладка «Команды» → «Скачать посты канала».</p>`;
+      return;
+    }
+    box.innerHTML = `<p class="hint">Мнения канала и их разбор ИИ — только справочно, на сделки не влияют.</p>` +
+      posts.map((p) => {
+        const views = p.views.map((v) => `<span class="bias ${esc(v.bias)}">${esc(v.symbol)} ${esc(v.bias)} (${esc(v.horizon)})</span>`).join("");
+        const summary = p.summary === null ? `<span class="hint">не разобран</span>` : `${views}${esc(p.summary)}`;
+        return `<div class="post"><div class="meta">${when(p.time)} · ${esc(p.channel)} #${p.post_id}</div>` +
+          `<div class="text">${esc(p.text)}</div><div>ИИ: ${summary}</div></div>`;
+      }).join("");
+  }
+
+  // ===================== запуск =====================
+  async function loadMeta() {
+    const meta = await api("/api/strategies");
+    app.symbols = meta.symbols;
+    app.timeframes = meta.timeframes;
+    app.strategies = meta.strategies;
+    $("w-tf").innerHTML = app.timeframes.map((t) => `<option>${t}</option>`).join("");
+  }
+
+  setInterval(async () => {
+    if (app.tab === "bots") { await refreshBots(); const t = $("bp-table"); if (t) { t.innerHTML = botTable(app.bots, true); bindBotButtons(t, renderBotsPage); } loadCliBot(); }
+    else if (app.views[app.tab] && app.views[app.tab].sub === "bots") { await refreshBots(); renderStrategyBots(app.views[app.tab]); }
+  }, 10000);
+
+  (async () => {
+    await loadMeta();
+    await Promise.all([refreshBacktests(), refreshBots()]);
+    let start = "overview";
+    try { start = localStorage.getItem("bot.tab") || "overview"; } catch (e) { /* нет localStorage */ }
+    const known = ["overview", "bots", "data", "journals", "commands", "telegram", ...app.strategies.map((s) => s.name)];
+    openTab(known.includes(start) ? start : "overview");
+  })();
   </script>
 </body>
 </html>

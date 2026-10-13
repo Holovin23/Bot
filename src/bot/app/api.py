@@ -1,5 +1,5 @@
-"""Локальный веб-интерфейс: свечи, индикаторы и сделки бэктестов
-на TradingView Lightweight Charts.
+"""Локальный веб-интерфейс: графики стратегий, бэктесты, загрузка данных, paper-боты
+и все команды терминала.
 
 Запуск:
     uv run python -m bot.app.api
@@ -9,7 +9,9 @@
 from __future__ import annotations
 
 import json
-import math
+import re
+import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -19,101 +21,49 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from bot.app.backtests import list_backtests, load_backtest, load_equity, load_report
+from bot.app.backtests import (
+    FOLDER_RE,
+    list_backtests,
+    load_backtest,
+    load_equity,
+    load_report,
+)
 from bot.app.bot_status import bot_status, request_kill, request_resume
-from bot.app.jobs import JobRunner, RunFn
+from bot.app.charts import (  # chart_bars — для совместимости со старыми импортами
+    build_chart_data,
+    build_strategy_chart,
+    chart_bars,
+)
+from bot.app.commands import CommandRunner, catalog
+from bot.app.jobs import Job, JobRunner, RunFn
 from bot.app.refresh import CandleRefresher
-from bot.backtest.report import run_report
-from bot.core.config import load_config
+from bot.app.symbols import SymbolBook, coverage
 from bot.core.db import connect, db_path
-from bot.core.timeframes import timeframe_minutes
-from bot.data.resample import resample_candles
+from bot.core.journal import read_journal
+from bot.data.downloader import Downloader
 from bot.data.storage import Storage
-from bot.features.indicators import bollinger, ema
 from bot.research.experiment import IN_SAMPLE_END, IN_SAMPLE_START
-from bot.research.periods import HOLDOUT
-from bot.strategies.registry import STRATEGIES
+from bot.research.periods import HOLDOUT, touches_holdout
+from bot.runner.host import BotHost
+from bot.strategies.registry import STRATEGIES, create_strategy
+
+__all__ = ["chart_bars", "create_app", "main"]
 
 STATIC_DIR = Path(__file__).parent / "static"
 TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h"]
-EMA_LENGTHS = (20, 50, 200)
-# Лишние свечи слева, чтобы EMA200 «разогрелась» и совпадала с графиком Bybit.
-WARMUP_BARS = 1000
-INDICATOR_COLUMNS = ["ema20", "ema50", "ema200", "bb_lower", "bb_middle", "bb_upper"]
+# Файлы бэктеста, которые можно скачать из интерфейса (для разбора и для ИИ)
+BACKTEST_FILES = {
+    "report.md",
+    "trades.csv",
+    "trades.jsonl",
+    "skipped.jsonl",
+    "equity.csv",
+    "run.json",
+    "validation.md",
+}
+JOURNAL_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,120}\.jsonl$")
 
-
-def _clean(value: float) -> float | None:
-    return None if math.isnan(value) else round(float(value), 8)
-
-
-def chart_bars(df_1m: pd.DataFrame, timeframe: str) -> pd.DataFrame:
-    """Свечи для графика: как resample_candles, но последняя, ещё не закрытая свеча
-    таймфрейма (например, текущий час) остаётся — как на графике биржи. Стратегии
-    этой функцией не пользуются: они видят только закрытые свечи."""
-    bars = resample_candles(df_1m, timeframe)
-    if df_1m.empty or timeframe == "1m":
-        return bars
-    period = pd.Timedelta(minutes=timeframe_minutes(timeframe))
-    first = df_1m["open_time"].min()
-    tail_start = bars["open_time"].iloc[-1] + period if len(bars) else first.ceil(period)
-    tail = df_1m[df_1m["open_time"] >= tail_start]
-    if tail.empty:
-        return bars
-    partial = (
-        tail.groupby(tail["open_time"].dt.floor(period), sort=True)
-        .agg(
-            open=("open", "first"),
-            high=("high", "max"),
-            low=("low", "min"),
-            close=("close", "last"),
-            volume=("volume", "sum"),
-            turnover=("turnover", "sum"),
-        )
-        .rename_axis("open_time")
-        .reset_index()
-    )
-    result: pd.DataFrame = pd.concat([bars, partial[bars.columns]], ignore_index=True)
-    return result
-
-
-def build_chart_data(
-    storage: Storage, symbol: str, timeframe: str, limit: int, until: int | None = None
-) -> dict[str, Any]:
-    """limit последних свечей; until (секунды UTC) — показать свечи до этого момента."""
-    last = storage.last_candle_time(symbol, "1m")
-    if last is None:
-        return {"symbol": symbol, "timeframe": timeframe, "candles": []}
-    minutes = timeframe_minutes(timeframe)
-    end = None
-    if until is not None:
-        end = pd.Timestamp(until, unit="s", tz="UTC").ceil(f"{minutes}min")
-        last = min(last, end - pd.Timedelta(minutes=1))
-    start = (last - pd.Timedelta(minutes=minutes * (limit + WARMUP_BARS))).floor(f"{minutes}min")
-    df = chart_bars(storage.read_candles(symbol, "1m", start=start, end=end), timeframe)
-
-    for length in EMA_LENGTHS:
-        df[f"ema{length}"] = ema(df["close"], length)
-    df = pd.concat([df, bollinger(df["close"], 20, 2.0)], axis=1)
-    df = df.tail(limit)
-
-    # Время в секундах UTC (open_time хранится в миллисекундах).
-    df["time"] = df["open_time"].astype("int64") // 1000
-    columns = ["time", "open", "high", "low", "close", "volume", *INDICATOR_COLUMNS]
-    candles: list[dict[str, Any]] = []
-    for record in df[columns].to_dict(orient="records"):
-        item = {str(key): value for key, value in record.items()}
-        item["time"] = int(item["time"])
-        for name in INDICATOR_COLUMNS:
-            item[name] = _clean(item[name])
-        candles.append(item)
-    last_1m = storage.last_candle_time(symbol, "1m")
-    return {
-        "symbol": symbol,
-        "timeframe": timeframe,
-        "candles": candles,
-        # время открытия последней сохранённой 1m-свечи (секунды UTC) — насколько свежие данные
-        "last_minute": int(last_1m.timestamp()) if last_1m is not None else None,
-    }
+DownloaderFactory = Callable[[Callable[[str], None]], Downloader]
 
 
 class RunRequest(BaseModel):
@@ -123,14 +73,76 @@ class RunRequest(BaseModel):
     start: str = IN_SAMPLE_START
     end: str = IN_SAMPLE_END
     params: dict[str, Any] = Field(default_factory=dict)
+    # Период задевает hold-out: запуск только с явного согласия, он запишется в
+    # research/holdout-log.md (hold-out после этого считается открытым).
+    allow_holdout: bool = False
+    # Перед бэктестом догрузить с Bybit недостающие свечи и funding за период
+    download: bool = True
+
+
+class DownloadRequest(BaseModel):
+    symbols: list[str]
+    start: str
+    end: str | None = None
+    open_interest: bool = False
+
+
+class SymbolRequest(BaseModel):
+    symbol: str
+
+
+class BotRequest(BaseModel):
+    strategy: str
+    symbol: str
+    timeframe: str = "1h"
+    params: dict[str, Any] = Field(default_factory=dict)
+    capital: float = Field(default=10_000, gt=0)
+
+
+class CommandRequest(BaseModel):
+    values: dict[str, Any] = Field(default_factory=dict)
+
+
+def parse_period(start: str, end: str | None) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Даты из формы (ГГГГ-ММ-ДД, end включительно) → [начало, конец). Ошибка — 400."""
+    try:
+        begin = pd.Timestamp(start, tz="UTC")
+        stop = (
+            pd.Timestamp(end, tz="UTC") + pd.Timedelta(days=1)
+            if end
+            else pd.Timestamp.now(tz="UTC").ceil("1min")
+        )
+    except (ValueError, TypeError):
+        raise HTTPException(400, f"Неверная дата: {start!r} — {end!r}") from None
+    if pd.isna(begin) or pd.isna(stop):
+        raise HTTPException(400, "Укажите обе даты периода")
+    if stop <= begin:
+        raise HTTPException(400, "Дата «по» раньше даты «с»")
+    return begin, stop
 
 
 def strategy_catalog() -> list[dict[str, Any]]:
-    """Стратегии и их параметры по умолчанию (для формы запуска)."""
-    return [
-        {"name": name, "version": cls.version, "params": cls("1h").params}
-        for name, cls in sorted(STRATEGIES.items())
-    ]
+    """Стратегии, их параметры по умолчанию и индикаторы для графика."""
+    out = []
+    for name, cls in sorted(STRATEGIES.items()):
+        strategy = cls("1h")
+        out.append(
+            {
+                "name": name,
+                "version": cls.version,
+                "params": strategy.params,
+                "description": _doc(cls),
+                "indicators": [s.label for s in strategy.chart_series()],
+            }
+        )
+    return out
+
+
+def _doc(cls: type) -> str:
+    """Описание стратегии — docstring её модуля."""
+    module = sys.modules.get(cls.__module__)
+    text = (module.__doc__ if module is not None else None) or ""
+    return text.strip()
 
 
 def telegram_feed(data_dir: Path, limit: int) -> list[dict[str, Any]]:
@@ -175,18 +187,91 @@ def create_app(
     backtests_dir: Path | None = None,
     run: RunFn | None = None,
     refresher: CandleRefresher | None = None,
+    downloader_factory: DownloaderFactory | None = None,
+    symbol_book: SymbolBook | None = None,
+    host: BotHost | None = None,
+    jobs: JobRunner | None = None,
+    commands: CommandRunner | None = None,
+    journal_dir: Path | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Bot")
     backtests_root = backtests_dir if backtests_dir is not None else storage.root / "backtests"
-    jobs = JobRunner(run) if run is not None else None
+    jobs = jobs or JobRunner()
+
+    def check_symbol(symbol: str, code: int = 400) -> None:
+        if symbol not in symbols:
+            raise HTTPException(code, f"Неизвестный символ {symbol}: добавьте его в «Данных»")
+
+    def check_timeframe(timeframe: str) -> None:
+        if timeframe not in TIMEFRAMES:
+            raise HTTPException(400, f"Таймфрейм должен быть одним из {TIMEFRAMES}")
+
+    def check_strategy(name: str) -> None:
+        if name not in STRATEGIES:
+            raise HTTPException(400, f"Неизвестная стратегия {name}")
 
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
 
+    # --- монеты и данные ---------------------------------------------------------------
+
     @app.get("/api/symbols")
-    def get_symbols() -> dict[str, list[str]]:
-        return {"symbols": symbols, "timeframes": TIMEFRAMES}
+    def get_symbols() -> dict[str, Any]:
+        local = sorted(symbol_book.local()) if symbol_book is not None else []
+        return {"symbols": symbols, "timeframes": TIMEFRAMES, "local": local}
+
+    @app.post("/api/symbols")
+    def add_symbol(request: SymbolRequest) -> dict[str, Any]:
+        if symbol_book is None:
+            raise HTTPException(503, "Добавление монет не настроено")
+        try:
+            return symbol_book.add(request.symbol)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(400, str(exc)) from None
+        except Exception as exc:  # нет интернета, Bybit недоступен
+            raise HTTPException(502, f"Не удалось спросить Bybit: {type(exc).__name__}") from None
+
+    @app.delete("/api/symbols/{symbol}")
+    def delete_symbol(symbol: str) -> dict[str, str]:
+        if symbol_book is None:
+            raise HTTPException(503, "Добавление монет не настроено")
+        try:
+            symbol_book.remove(symbol)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        return {"status": f"{symbol} убран из списка (скачанные данные остались в data/)"}
+
+    @app.get("/api/data/coverage")
+    def get_coverage() -> dict[str, Any]:
+        return {"coverage": [coverage(storage, s) for s in symbols]}
+
+    @app.post("/api/data/download")
+    def download(request: DownloadRequest) -> dict[str, Any]:
+        if downloader_factory is None:
+            raise HTTPException(503, "Загрузка данных не настроена")
+        if not request.symbols:
+            raise HTTPException(400, "Выберите хотя бы одну монету")
+        for symbol in request.symbols:
+            check_symbol(symbol)
+        begin, stop = parse_period(request.start, request.end)
+        names = ", ".join(request.symbols)
+
+        def work(job: Job) -> str:
+            loader = downloader_factory(job.say)
+            total = 0
+            for symbol in request.symbols:
+                total += loader.ensure_history(symbol, begin, stop)
+                if request.open_interest:
+                    loader.download_open_interest(symbol, begin)
+            return f"новых 1m-свечей: {total}"
+
+        title = f"Загрузка {names} {begin:%Y-%m-%d} — {stop - pd.Timedelta(days=1):%Y-%m-%d}"
+        try:
+            job = jobs.start("download", title, work, request.model_dump())
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from None
+        return {"job_id": job.job_id}
 
     @app.get("/api/candles")
     def get_candles(
@@ -194,17 +279,48 @@ def create_app(
         timeframe: str = "1h",
         limit: int = Query(default=500, ge=10, le=5000),
         until: int | None = Query(default=None, ge=0),
+        start: int | None = Query(default=None, ge=0),
+        end: int | None = Query(default=None, ge=0),
     ) -> dict[str, Any]:
-        if symbol not in symbols:
-            raise HTTPException(404, f"Неизвестный символ {symbol}")
-        if timeframe not in TIMEFRAMES:
-            raise HTTPException(400, f"Таймфрейм должен быть одним из {TIMEFRAMES}")
-        data = build_chart_data(storage, symbol, timeframe, limit, until)
+        check_symbol(symbol, 404)
+        check_timeframe(timeframe)
+        data = build_chart_data(storage, symbol, timeframe, limit, until, start, end)
         data["refreshing"], data["refresh_error"] = False, None
-        if refresher is not None and until is None:
+        if refresher is not None and until is None and start is None:
             state = refresher.request(symbol)
             data["refreshing"], data["refresh_error"] = state.running, state.error
         return data
+
+    @app.get("/api/strategy-chart")
+    def get_strategy_chart(
+        strategy: str,
+        symbol: str,
+        timeframe: str = "1h",
+        params: str = "{}",
+        limit: int = Query(default=500, ge=10, le=5000),
+        until: int | None = Query(default=None, ge=0),
+        start: int | None = Query(default=None, ge=0),
+        end: int | None = Query(default=None, ge=0),
+    ) -> dict[str, Any]:
+        check_strategy(strategy)
+        check_symbol(symbol, 404)
+        check_timeframe(timeframe)
+        try:
+            values = json.loads(params)
+            if not isinstance(values, dict):
+                raise ValueError("параметры должны быть словарём")
+            data = build_strategy_chart(
+                storage, strategy, symbol, timeframe, values, limit, until, start, end
+            )
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(400, f"Параметры стратегии: {exc}") from None
+        data["refreshing"], data["refresh_error"] = False, None
+        if refresher is not None and until is None and start is None:
+            state = refresher.request(symbol)
+            data["refreshing"], data["refresh_error"] = state.running, state.error
+        return data
+
+    # --- бэктесты ----------------------------------------------------------------------
 
     @app.get("/api/backtests")
     def get_backtests() -> dict[str, list[dict[str, Any]]]:
@@ -231,6 +347,117 @@ def create_app(
             raise HTTPException(404, f"Нет бэктеста {backtest_id}")
         return {"report": text}
 
+    @app.get("/api/backtests/{backtest_id}/files/{name}")
+    def get_backtest_file(backtest_id: str, name: str) -> FileResponse:
+        path = backtests_root / backtest_id / name
+        if FOLDER_RE.match(backtest_id) is None or name not in BACKTEST_FILES:
+            raise HTTPException(404, "Нет такого файла")
+        if not path.is_file():
+            raise HTTPException(404, "Нет такого файла (бэктест сделан до появления журналов)")
+        return FileResponse(path, filename=f"{backtest_id}_{name}")
+
+    @app.post("/api/backtests/run")
+    def run_backtest_job(request: RunRequest) -> dict[str, Any]:
+        if run is None:
+            raise HTTPException(503, "Запуск бэктестов не настроен")
+        check_strategy(request.strategy)
+        check_symbol(request.symbol)
+        check_timeframe(request.timeframe)
+        begin, stop = parse_period(request.start, request.end)
+        try:
+            create_strategy(request.strategy, request.timeframe, request.params)
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(400, f"Параметры стратегии: {exc}") from None
+        if touches_holdout(begin, stop) and not request.allow_holdout:
+            last = HOLDOUT.end - pd.Timedelta(days=1)
+            raise HTTPException(
+                409,
+                {
+                    "holdout": True,
+                    "message": (
+                        f"Период задевает hold-out ({HOLDOUT.start:%Y-%m-%d} — {last:%Y-%m-%d}). "
+                        "Это последняя честная проверка стратегии: её смотрят один раз, в конце. "
+                        "Если всё равно запустить, запуск запишется в research/holdout-log.md."
+                    ),
+                },
+            )
+        body = request.model_dump()
+        title = (
+            f"Бэктест {request.strategy} {request.symbol} {request.timeframe} "
+            f"{request.start} — {request.end}"
+        )
+        try:
+            job = jobs.start("backtest", title, lambda job: run(body, job.say), body)
+        except RuntimeError:
+            raise HTTPException(409, "Уже идёт другой бэктест — дождитесь окончания") from None
+        return {"job_id": job.job_id}
+
+    # --- фоновые задачи и команды ------------------------------------------------------
+
+    @app.get("/api/jobs")
+    def get_jobs(kind: str | None = None) -> dict[str, Any]:
+        items = [j.summary() for j in jobs.list(100) if kind is None or j.kind == kind]
+        return {"jobs": items}
+
+    @app.get("/api/jobs/{job_id}")
+    def get_job(job_id: str, log: int = Query(default=0, ge=0, le=5000)) -> dict[str, Any]:
+        job = jobs.get(job_id)
+        if job is None:
+            raise HTTPException(404, "Нет такого запуска")
+        return job.summary(log_tail=log)
+
+    @app.post("/api/jobs/{job_id}/stop")
+    def stop_job(job_id: str) -> dict[str, str]:
+        if commands is None or not commands.stop(job_id):
+            raise HTTPException(404, "Эту задачу нельзя остановить (или она уже закончилась)")
+        return {"status": "остановка отправлена"}
+
+    @app.get("/api/commands")
+    def get_commands() -> dict[str, Any]:
+        return {"commands": catalog(symbols)}
+
+    @app.post("/api/commands/{command_id}")
+    def run_command(command_id: str, request: CommandRequest) -> dict[str, Any]:
+        if commands is None:
+            raise HTTPException(503, "Запуск команд не настроен")
+        try:
+            job = commands.start(command_id, request.values)
+        except KeyError:
+            raise HTTPException(404, f"Нет команды {command_id}") from None
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(400, str(exc)) from None
+        return {"job_id": job.job_id}
+
+    # --- журналы (JSONL) ---------------------------------------------------------------
+
+    def journal_path(name: str) -> Path:
+        if journal_dir is None or not JOURNAL_RE.match(name) or ".." in name:
+            raise HTTPException(404, "Нет такого журнала")
+        path = journal_dir / name
+        if not path.is_file():
+            raise HTTPException(404, "Журнал пока пуст")
+        return path
+
+    @app.get("/api/journals")
+    def get_journals() -> dict[str, Any]:
+        if journal_dir is None or not journal_dir.is_dir():
+            return {"journals": []}
+        files = sorted(journal_dir.glob("*.jsonl"))
+        return {
+            "dir": str(journal_dir),
+            "journals": [{"name": p.name, "size": p.stat().st_size} for p in files],
+        }
+
+    @app.get("/api/journals/{name}")
+    def get_journal(name: str, limit: int = Query(default=200, ge=1, le=5000)) -> dict[str, Any]:
+        return {"name": name, "records": read_journal(journal_path(name), limit)}
+
+    @app.get("/api/journals/{name}/download")
+    def download_journal(name: str) -> FileResponse:
+        return FileResponse(journal_path(name), filename=name)
+
+    # --- Telegram ----------------------------------------------------------------------
+
     @app.get("/api/telegram")
     def get_telegram(limit: int = Query(default=50, ge=1, le=500)) -> dict[str, Any]:
         return {"posts": telegram_feed(storage.root, limit)}
@@ -239,30 +466,7 @@ def create_app(
     def get_strategies() -> dict[str, Any]:
         return {"strategies": strategy_catalog(), "symbols": symbols, "timeframes": TIMEFRAMES}
 
-    @app.post("/api/backtests/run")
-    def run_backtest_job(request: RunRequest) -> dict[str, Any]:
-        if jobs is None:
-            raise HTTPException(503, "Запуск бэктестов не настроен")
-        if request.strategy not in STRATEGIES:
-            raise HTTPException(400, f"Неизвестная стратегия {request.strategy}")
-        if request.symbol not in symbols:
-            raise HTTPException(400, f"Неизвестный символ {request.symbol}")
-        if request.timeframe not in TIMEFRAMES:
-            raise HTTPException(400, f"Таймфрейм должен быть одним из {TIMEFRAMES}")
-        if pd.Timestamp(request.end, tz="UTC") >= HOLDOUT.start:
-            raise HTTPException(400, "Период заходит в hold-out: используйте bot.research.validate")
-        try:
-            job = jobs.start(request.model_dump(), wait=False)
-        except RuntimeError as exc:
-            raise HTTPException(409, str(exc)) from None
-        return {"job_id": job.job_id}
-
-    @app.get("/api/jobs/{job_id}")
-    def get_job(job_id: str) -> dict[str, Any]:
-        job = jobs.get(job_id) if jobs is not None else None
-        if job is None:
-            raise HTTPException(404, "Нет такого запуска")
-        return {"status": job.status, "backtest_id": job.backtest_id, "error": job.error}
+    # --- бот из терминала (config/live.yaml) -------------------------------------------
 
     @app.get("/api/bot")
     def get_bot(
@@ -272,13 +476,80 @@ def create_app(
 
     @app.post("/api/bot/kill")
     def post_kill() -> dict[str, str]:
+        """Аварийная остановка всего: бот из терминала (файл data/KILL) и paper-боты."""
         request_kill(storage.root, "кнопка в интерфейсе")
-        return {"status": "запрошена аварийная остановка: бот выполнит её в течение минуты"}
+        stopped = host.kill_all("кнопка в интерфейсе") if host is not None else 0
+        return {
+            "status": "запрошена аварийная остановка: бот из терминала выполнит её в течение "
+            f"минуты; paper-ботов остановлено: {stopped}"
+        }
 
     @app.post("/api/bot/resume")
     def post_resume() -> dict[str, str]:
         request_resume(storage.root)
         return {"status": "запрошено возобновление: бот выполнит его в течение минуты"}
+
+    # --- paper-боты интерфейса ---------------------------------------------------------
+
+    def need_host() -> BotHost:
+        if host is None:
+            raise HTTPException(503, "Paper-боты не настроены")
+        return host
+
+    @app.get("/api/bots")
+    def get_bots() -> dict[str, Any]:
+        return {"bots": need_host().list()}
+
+    @app.post("/api/bots")
+    def create_bot(request: BotRequest) -> dict[str, Any]:
+        h = need_host()
+        check_strategy(request.strategy)
+        check_symbol(request.symbol)
+        check_timeframe(request.timeframe)
+        try:
+            spec = h.create(
+                request.strategy, request.symbol, request.timeframe, request.params,
+                request.capital,
+            )
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(400, str(exc)) from None
+        return {"id": spec.id}
+
+    def bot_action(bot_id: str, action: Callable[[str], None]) -> dict[str, str]:
+        try:
+            action(bot_id)
+        except KeyError:
+            raise HTTPException(404, f"Бот {bot_id} не найден или не запущен") from None
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        return {"status": "ok"}
+
+    @app.get("/api/bots/{bot_id}")
+    def get_bot_detail(bot_id: str) -> dict[str, Any]:
+        try:
+            return need_host().detail(bot_id)
+        except (KeyError, ValueError):
+            raise HTTPException(404, f"Бот {bot_id} не найден") from None
+
+    @app.post("/api/bots/{bot_id}/start")
+    def start_bot(bot_id: str) -> dict[str, str]:
+        return bot_action(bot_id, need_host().start)
+
+    @app.post("/api/bots/{bot_id}/stop")
+    def stop_bot(bot_id: str) -> dict[str, str]:
+        return bot_action(bot_id, need_host().stop)
+
+    @app.post("/api/bots/{bot_id}/kill")
+    def kill_bot(bot_id: str) -> dict[str, str]:
+        return bot_action(bot_id, lambda i: need_host().kill(i, "кнопка в интерфейсе"))
+
+    @app.post("/api/bots/{bot_id}/resume")
+    def resume_bot(bot_id: str) -> dict[str, str]:
+        return bot_action(bot_id, need_host().resume)
+
+    @app.delete("/api/bots/{bot_id}")
+    def delete_bot(bot_id: str) -> dict[str, str]:
+        return bot_action(bot_id, need_host().delete)
 
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     return app
@@ -287,34 +558,105 @@ def create_app(
 def main() -> None:
     import uvicorn
 
-    cfg = load_config()
+    from bot.backtest.report import run_report
+    from bot.core.config import DEFAULT_CONFIG_PATH, PROJECT_ROOT, load_config
+    from bot.core.logging import setup_logging
+    from bot.data.bybit_public import make_public_client
+    from bot.data.live_feed import LiveFeed
+    from bot.notify.telegram import TelegramNotifier
+    from bot.research.periods import open_holdout
 
-    def run(
-        strategy: str, symbol: str, timeframe: str, start: str, end: str, params: dict[str, Any]
-    ) -> str:
+    cfg = load_config()
+    setup_logging(cfg.resolve(cfg.logging.dir), cfg.logging.level, cfg.logging.retention_days)
+    data_dir = cfg.resolve(cfg.data.dir)
+    logs_dir = cfg.resolve(cfg.logging.dir)
+    storage = Storage(data_dir)
+    public = make_public_client()
+
+    def make_downloader(say: Callable[[str], None]) -> Downloader:
+        return Downloader(public, storage, category=cfg.data.category, say=say)
+
+    def run(request: dict[str, Any], say: Callable[[str], None]) -> str:
+        current = load_config()  # свежие настройки: монеты могли добавить из интерфейса
+        start = pd.Timestamp(request["start"], tz="UTC")
+        end = pd.Timestamp(request["end"], tz="UTC") + pd.Timedelta(days=1)
+        if request.get("download", True):
+            say("проверяю историю за период, недостающее загружаю с Bybit…")
+            try:
+                make_downloader(say).ensure_history(request["symbol"], start, end)
+            except Exception as exc:  # без интернета — бэктест на том, что уже скачано
+                say(f"не удалось загрузить с Bybit ({type(exc).__name__}), считаю на том, что есть")
+        if touches_holdout(start, end):
+            params = ", ".join(f"{k}={v}" for k, v in request["params"].items()) or "—"
+            open_holdout(
+                PROJECT_ROOT / "research" / "holdout-log.md",
+                request["strategy"],
+                request["symbol"],
+                request["timeframe"],
+                params + " (бэктест из интерфейса)",
+                force=True,
+            )
+            say("запуск записан в research/holdout-log.md")
         folder, _ = run_report(
-            cfg,
-            strategy,
-            symbol,
-            timeframe,
-            pd.Timestamp(start, tz="UTC"),
-            pd.Timestamp(end, tz="UTC") + pd.Timedelta(days=1),
-            params,
+            current,
+            request["strategy"],
+            request["symbol"],
+            request["timeframe"],
+            start,
+            end,
+            request["params"],
+            say=say,
         )
         return folder.name
 
-    from bot.data.bybit_public import make_public_client
-    from bot.data.downloader import Downloader
-
-    storage = Storage(cfg.resolve(cfg.data.dir))
-    downloader = Downloader(make_public_client(), storage, category=cfg.data.category)
+    refresh_loader = make_downloader(lambda _text: None)
     refresher = CandleRefresher(
-        lambda symbol, start: downloader.download_klines(symbol, start, "1m"),
+        lambda symbol, start: refresh_loader.download_klines(symbol, start, "1m"),
         lambda symbol: storage.last_candle_time(symbol, "1m"),
     )
-    app = create_app(storage, cfg.data.symbols, run=run, refresher=refresher)
+
+    def lookup(symbol: str) -> dict[str, Any] | None:
+        items = public.get_instruments_info(category=cfg.data.category, symbol=symbol)
+        found: list[dict[str, Any]] = items["result"]["list"]
+        return found[0] if found else None
+
+    symbols = list(cfg.data.symbols)
+    book = SymbolBook(symbols, DEFAULT_CONFIG_PATH.parent, lookup)
+    notifier = TelegramNotifier.from_secrets(cfg.secrets)
+    journal_dir = logs_dir / "journal"
+    host = BotHost(
+        data_dir,
+        storage,
+        load_config,
+        journal_dir,
+        feed_factory=lambda syms, on_candle: LiveFeed(
+            storage, make_downloader(lambda _text: None), syms, on_candle=on_candle
+        ),
+        history=lambda symbol, start, end: make_downloader(print).ensure_history(
+            symbol, start, end
+        ),
+        notify=notifier.send,
+    )
+    jobs = JobRunner(logs_dir / "jobs")
+    commands = CommandRunner(jobs, lambda: symbols)
+    app = create_app(
+        storage,
+        symbols,
+        run=run,
+        refresher=refresher,
+        downloader_factory=make_downloader,
+        symbol_book=book,
+        host=host,
+        jobs=jobs,
+        commands=commands,
+        journal_dir=journal_dir,
+    )
+    host.autostart()
     print(f"Откройте http://{cfg.app.host}:{cfg.app.port}  (остановить: Ctrl+C)")
-    uvicorn.run(app, host=cfg.app.host, port=cfg.app.port)
+    try:
+        uvicorn.run(app, host=cfg.app.host, port=cfg.app.port)
+    finally:
+        host.shutdown()
 
 
 if __name__ == "__main__":
