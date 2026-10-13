@@ -75,6 +75,7 @@
       <span style="--c:#bd10e0">EMA200</span>
       <span style="--c:#8b949e">Bollinger (20, 2)</span>
     </div>
+    <button id="refresh" title="Догрузить свежие свечи с Bybit и перерисовать график">Обновить</button>
     <div id="status"></div>
   </header>
   <div id="tradeinfo"></div>
@@ -165,8 +166,13 @@
                                                                    { maximumFractionDigits: 4 });
     const when = (t) => new Date(t * 1000).toLocaleString();
 
-    async function load(until = null) {
-      status.textContent = "загрузка…";
+    let viewUntil = null;     // null — живой график; число — смотрим историческую сделку
+    let reloadTimer = null;
+
+    async function load(until = null, keepView = false) {
+      viewUntil = until;
+      if (!keepView) status.textContent = "загрузка…";
+      const range = keepView ? chart.timeScale().getVisibleLogicalRange() : null;
       const params = new URLSearchParams({ symbol: symbolSel.value, timeframe: tfSel.value,
                                            limit: 1000 });
       if (until !== null) params.set("until", until);
@@ -181,10 +187,28 @@
                            .map((r) => ({ time: local(r.time), value: r[name] })));
       }
       drawTrades(rows);
-      if (until === null) chart.timeScale().fitContent();
-      status.textContent = rows.length
-        ? `${rows.length} свечей, последняя ${when(rows.at(-1).time)}`
-        : "нет данных — сначала загрузите историю";
+      if (range) chart.timeScale().setVisibleLogicalRange(range);
+      else if (until === null) chart.timeScale().fitContent();
+      status.textContent = statusText(data, rows);
+      // Пока идёт догрузка с Bybit — перерисовать через 5 с, иначе раз в минуту.
+      clearTimeout(reloadTimer);
+      if (until === null) {
+        reloadTimer = setTimeout(() => { if (viewUntil === null) load(null, true); },
+                                 data.refreshing ? 5000 : 60000);
+      }
+    }
+
+    function statusText(data, rows) {
+      if (!rows.length) {
+        return data.refreshing ? "загружаю свечи с Bybit…"
+          : "нет данных — загрузите историю (python -m bot.data.downloader)";
+      }
+      let text = `${rows.length} свечей, последняя минута ${data.last_minute ? when(data.last_minute) : "—"}`;
+      const lagMin = data.last_minute ? Math.round((Date.now() / 1000 - data.last_minute) / 60) : 0;
+      if (data.refreshing) text += " · догружаю свежие свечи с Bybit…";
+      else if (data.refresh_error) text += ` · ${data.refresh_error}`;
+      else if (lagMin > 3 && viewUntil === null) text += ` · отстаёт на ${lagMin} мин`;
+      return text;
     }
 
     // Маркеры входов и выходов всех сделок бэктеста, попавших на загруженные свечи.
@@ -328,14 +352,14 @@
       backtest = await response.json();
       symbolSel.value = backtest.symbol;
       if (TF_SECONDS[backtest.timeframe]) tfSel.value = backtest.timeframe;
-      tradeSel.innerHTML = backtest.trades.map((t) =>
+      tradeSel.innerHTML = `<option value="">— текущий график —</option>` + backtest.trades.map((t) =>
         `<option value="${t.number}">#${t.number} ${new Date(t.entry_time * 1000)
           .toLocaleDateString()} ${t.side} ${t.exit_reason} ${t.r_multiple.toFixed(2)}R</option>`
       ).join("");
       tradeSel.disabled = backtest.trades.length === 0;
       renderTable();
       loadExtras(backtest.id);
-      if (backtest.trades.length) showTrade();
+      if (backtest.trades.length) { tradeSel.value = String(backtest.trades[0].number); showTrade(); }
       else { info.textContent = "в бэктесте нет сделок"; load(); }
     }
 
@@ -483,6 +507,9 @@
       rStrategy.onchange = renderParams;
       renderParams();
       symbolSel.onchange = tfSel.onchange = () => (selectedTrade() ? showTrade() : load());
+      document.getElementById("refresh").onclick = () => {
+        tradeSel.value = ""; info.textContent = ""; markRow(); load();
+      };
       backtestSel.onchange = chooseBacktest;
       tradeSel.onchange = showTrade;
       load();

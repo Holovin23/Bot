@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from bot.app.backtests import list_backtests, load_backtest, load_equity, load_report
 from bot.app.bot_status import bot_status, request_kill, request_resume
 from bot.app.jobs import JobRunner, RunFn
+from bot.app.refresh import CandleRefresher
 from bot.backtest.report import run_report
 from bot.core.config import load_config
 from bot.core.db import connect, db_path
@@ -45,6 +46,36 @@ def _clean(value: float) -> float | None:
     return None if math.isnan(value) else round(float(value), 8)
 
 
+def chart_bars(df_1m: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+    """Свечи для графика: как resample_candles, но последняя, ещё не закрытая свеча
+    таймфрейма (например, текущий час) остаётся — как на графике биржи. Стратегии
+    этой функцией не пользуются: они видят только закрытые свечи."""
+    bars = resample_candles(df_1m, timeframe)
+    if df_1m.empty or timeframe == "1m":
+        return bars
+    period = pd.Timedelta(minutes=timeframe_minutes(timeframe))
+    first = df_1m["open_time"].min()
+    tail_start = bars["open_time"].iloc[-1] + period if len(bars) else first.ceil(period)
+    tail = df_1m[df_1m["open_time"] >= tail_start]
+    if tail.empty:
+        return bars
+    partial = (
+        tail.groupby(tail["open_time"].dt.floor(period), sort=True)
+        .agg(
+            open=("open", "first"),
+            high=("high", "max"),
+            low=("low", "min"),
+            close=("close", "last"),
+            volume=("volume", "sum"),
+            turnover=("turnover", "sum"),
+        )
+        .rename_axis("open_time")
+        .reset_index()
+    )
+    result: pd.DataFrame = pd.concat([bars, partial[bars.columns]], ignore_index=True)
+    return result
+
+
 def build_chart_data(
     storage: Storage, symbol: str, timeframe: str, limit: int, until: int | None = None
 ) -> dict[str, Any]:
@@ -58,7 +89,7 @@ def build_chart_data(
         end = pd.Timestamp(until, unit="s", tz="UTC").ceil(f"{minutes}min")
         last = min(last, end - pd.Timedelta(minutes=1))
     start = (last - pd.Timedelta(minutes=minutes * (limit + WARMUP_BARS))).floor(f"{minutes}min")
-    df = resample_candles(storage.read_candles(symbol, "1m", start=start, end=end), timeframe)
+    df = chart_bars(storage.read_candles(symbol, "1m", start=start, end=end), timeframe)
 
     for length in EMA_LENGTHS:
         df[f"ema{length}"] = ema(df["close"], length)
@@ -75,7 +106,14 @@ def build_chart_data(
         for name in INDICATOR_COLUMNS:
             item[name] = _clean(item[name])
         candles.append(item)
-    return {"symbol": symbol, "timeframe": timeframe, "candles": candles}
+    last_1m = storage.last_candle_time(symbol, "1m")
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "candles": candles,
+        # время открытия последней сохранённой 1m-свечи (секунды UTC) — насколько свежие данные
+        "last_minute": int(last_1m.timestamp()) if last_1m is not None else None,
+    }
 
 
 class RunRequest(BaseModel):
@@ -136,6 +174,7 @@ def create_app(
     symbols: list[str],
     backtests_dir: Path | None = None,
     run: RunFn | None = None,
+    refresher: CandleRefresher | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Bot")
     backtests_root = backtests_dir if backtests_dir is not None else storage.root / "backtests"
@@ -160,7 +199,12 @@ def create_app(
             raise HTTPException(404, f"Неизвестный символ {symbol}")
         if timeframe not in TIMEFRAMES:
             raise HTTPException(400, f"Таймфрейм должен быть одним из {TIMEFRAMES}")
-        return build_chart_data(storage, symbol, timeframe, limit, until)
+        data = build_chart_data(storage, symbol, timeframe, limit, until)
+        data["refreshing"], data["refresh_error"] = False, None
+        if refresher is not None and until is None:
+            state = refresher.request(symbol)
+            data["refreshing"], data["refresh_error"] = state.running, state.error
+        return data
 
     @app.get("/api/backtests")
     def get_backtests() -> dict[str, list[dict[str, Any]]]:
@@ -259,7 +303,16 @@ def main() -> None:
         )
         return folder.name
 
-    app = create_app(Storage(cfg.resolve(cfg.data.dir)), cfg.data.symbols, run=run)
+    from bot.data.bybit_public import make_public_client
+    from bot.data.downloader import Downloader
+
+    storage = Storage(cfg.resolve(cfg.data.dir))
+    downloader = Downloader(make_public_client(), storage, category=cfg.data.category)
+    refresher = CandleRefresher(
+        lambda symbol, start: downloader.download_klines(symbol, start, "1m"),
+        lambda symbol: storage.last_candle_time(symbol, "1m"),
+    )
+    app = create_app(storage, cfg.data.symbols, run=run, refresher=refresher)
     print(f"Откройте http://{cfg.app.host}:{cfg.app.port}  (остановить: Ctrl+C)")
     uvicorn.run(app, host=cfg.app.host, port=cfg.app.port)
 
