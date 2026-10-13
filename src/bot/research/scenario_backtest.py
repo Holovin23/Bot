@@ -16,10 +16,12 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
+from pydantic import ValidationError
 
 from bot.backtest.costs import CostModel
 from bot.backtest.engine import BacktestResult, run_backtest
@@ -131,6 +133,64 @@ def describe(run: SymbolRun) -> list[str]:
     return lines
 
 
+def backtest_post(
+    cfg: Config,
+    text: str,
+    published: pd.Timestamp,
+    *,
+    answer_json: str | None = None,
+    images: list[Path] | None = None,
+    days: float = 30,
+    timeframe: str = "1h",
+    allow_image_levels: bool = False,
+    model: str | None = None,
+    say: Callable[[str], None] = print,
+) -> list[SymbolRun]:
+    """Весь бэктест поста: разбор (готовый JSON или Claude API), проверки, прогон.
+    Общий код для командной строки и веб-интерфейса. Ошибка ввода — ValueError."""
+    symbols = cfg.scenarios.symbols
+    if answer_json:
+        try:
+            answer = PostScenarios.model_validate_json(answer_json)
+        except ValidationError as exc:
+            raise ValueError(f"Ответ разбора не по схеме: {exc}") from None
+    else:
+        key = cfg.secrets.anthropic_api_key.get_secret_value()
+        if not key:
+            raise ValueError("Нет ANTHROPIC_API_KEY: передайте готовый ответ разбора (план Б)")
+        import anthropic
+
+        from bot.scenarios.parser import parse_with_api
+
+        outcome = parse_with_api(
+            anthropic.Anthropic(api_key=key),
+            model or cfg.scenarios.model,
+            symbols,
+            published.isoformat(),
+            text,
+            images or [],
+            [],
+        )
+        if outcome.result is None:
+            raise ValueError(f"Пост не разобран: {outcome.error}")
+        answer = outcome.result
+        say(f"Токены: {outcome.usage}")
+    say(f"Разбор: {answer.post_kind}. {answer.summary_ru}")
+    versions, rejected = post_versions(answer, text, published, symbols)
+    for line in rejected:
+        say(f"отклонено: {line}")
+    if not versions:
+        raise ValueError("Нет сценариев для бэктеста.")
+    params: dict[str, object] = {"allow_image_levels": allow_image_levels}
+    storage = Storage(cfg.resolve(cfg.data.dir))
+    out = cfg.resolve(cfg.data.dir) / "backtests"
+    runs = run_post(cfg, storage, versions, published, days, timeframe, params, out)
+    for run in runs:
+        for line in describe(run):
+            say(line)
+    return runs
+
+
 def main(argv: list[str] | None = None) -> None:
     cfg = load_config()
     parser = argparse.ArgumentParser(description="Бэктест одного поста")
@@ -143,43 +203,20 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--model", default=None)
     parser.add_argument("--allow-image-levels", action="store_true")
     args = parser.parse_args(argv)
-    text = Path(args.post).read_text(encoding="utf-8").strip()
-    published = pd.Timestamp(args.date, tz="UTC")
-    symbols = cfg.scenarios.symbols
-    if args.scenario:
-        answer = PostScenarios.model_validate_json(Path(args.scenario).read_text(encoding="utf-8"))
-    else:
-        key = cfg.secrets.anthropic_api_key.get_secret_value()
-        if not key:
-            raise SystemExit("Нет ANTHROPIC_API_KEY: передайте готовый --scenario (план Б)")
-        import anthropic
-
-        from bot.scenarios.parser import parse_with_api
-
-        outcome = parse_with_api(
-            anthropic.Anthropic(api_key=key),
-            args.model or cfg.scenarios.model,
-            symbols,
-            published.isoformat(),
-            text,
-            [Path(p) for p in args.image],
-            [],
+    try:
+        backtest_post(
+            cfg,
+            Path(args.post).read_text(encoding="utf-8").strip(),
+            pd.Timestamp(args.date, tz="UTC"),
+            answer_json=Path(args.scenario).read_text(encoding="utf-8") if args.scenario else None,
+            images=[Path(p) for p in args.image],
+            days=args.days,
+            timeframe=args.timeframe,
+            allow_image_levels=args.allow_image_levels,
+            model=args.model,
         )
-        if outcome.result is None:
-            raise SystemExit(f"Пост не разобран: {outcome.error}")
-        answer = outcome.result
-        print(f"Токены: {outcome.usage}")
-    print(f"Разбор: {answer.post_kind}. {answer.summary_ru}")
-    versions, rejected = post_versions(answer, text, published, symbols)
-    for line in rejected:
-        print(f"отклонено: {line}")
-    if not versions:
-        raise SystemExit("Нет сценариев для бэктеста.")
-    params = {"allow_image_levels": args.allow_image_levels}
-    storage = Storage(cfg.resolve(cfg.data.dir))
-    out = cfg.resolve(cfg.data.dir) / "backtests"
-    for run in run_post(cfg, storage, versions, published, args.days, args.timeframe, params, out):
-        print("\n".join(describe(run)))
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
 
 
 if __name__ == "__main__":
