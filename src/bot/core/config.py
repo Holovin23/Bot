@@ -12,6 +12,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "default.yaml"
 DEFAULT_ENV_PATH = PROJECT_ROOT / ".env"
+# Монеты, добавленные из веб-интерфейса (не в git: у каждого свой список)
+LOCAL_SYMBOLS_NAME = "symbols.local.yaml"
+# Проскальзывание для добавленной монеты: у альткоинов стакан тоньше, чем у BTC и ETH,
+# поэтому берём с запасом 0,1%. Владелец может поправить в symbols.local.yaml.
+NEW_SYMBOL_SLIPPAGE = 0.001
 
 
 class DataConfig(BaseModel):
@@ -163,6 +168,45 @@ class Config(BaseModel):
         return path if path.is_absolute() else PROJECT_ROOT / path
 
 
+def local_symbols(path: Path) -> dict[str, dict[str, float]]:
+    """Монеты из symbols.local.yaml: {символ: {tick_size, qty_step, min_qty, slippage}}."""
+    if not path.exists():
+        return {}
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return {str(k): dict(v) for k, v in (raw.get("symbols") or {}).items()}
+
+
+def save_local_symbols(path: Path, symbols: dict[str, dict[str, float]]) -> None:
+    header = (
+        "# Монеты, добавленные из веб-интерфейса. Параметры взяты с Bybit\n"
+        "# (/v5/market/instruments-info). slippage — проскальзывание для бэктеста.\n"
+    )
+    body = yaml.safe_dump({"symbols": symbols}, allow_unicode=True, sort_keys=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(header + body, encoding="utf-8")
+
+
+def _merge_local_symbols(raw: dict[str, Any], extra: dict[str, dict[str, float]]) -> None:
+    """Добавить монеты из symbols.local.yaml к символам, инструментам и проскальзыванию.
+    То, что уже есть в default.yaml, не перезаписывается."""
+    if not extra:
+        return
+    data = raw.setdefault("data", {})
+    symbols = list(data.get("symbols") or DataConfig().symbols)
+    instruments = raw.setdefault("instruments", {})
+    costs = raw.setdefault("costs", {})
+    slippage = costs.setdefault("slippage", {})
+    for symbol, item in extra.items():
+        if symbol not in symbols:
+            symbols.append(symbol)
+        instruments.setdefault(
+            symbol,
+            {k: float(item[k]) for k in ("tick_size", "qty_step", "min_qty")},
+        )
+        slippage.setdefault(symbol, float(item.get("slippage", NEW_SYMBOL_SLIPPAGE)))
+    data["symbols"] = symbols
+
+
 def load_config(
     config_path: Path = DEFAULT_CONFIG_PATH,
     env_file: Path | None = DEFAULT_ENV_PATH,
@@ -170,6 +214,7 @@ def load_config(
     raw: dict[str, Any] = {}
     if config_path.exists():
         raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    _merge_local_symbols(raw, local_symbols(config_path.parent / LOCAL_SYMBOLS_NAME))
     env = env_file if env_file is not None and env_file.exists() else None
     secrets = Secrets(_env_file=env)  # type: ignore[call-arg]
     return Config(**raw, secrets=secrets)

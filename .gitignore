@@ -25,3 +25,6 @@ dist/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Монеты, добавленные из веб-интерфейса
+config/symbols.local.yaml
