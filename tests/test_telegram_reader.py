@@ -100,3 +100,27 @@ def test_progress_callback(tmp_path: Path) -> None:
         )
     )
     assert calls == [(20, 0), (40, 0)]
+
+
+def test_since_and_batches(tmp_path: Path) -> None:
+    from bot.analyzer import telegram_reader
+
+    # 45 сообщений, сообщение i опубликовано в 08:i UTC; нужны с 08:05 — это id 5..45 (41 шт.)
+    source = FakeMediaTelegram([msg(i, f"пост {i}") for i in range(1, 46)])
+    conn = connect(tmp_path / "bot.sqlite")
+    sizes: list[int] = []
+
+    def save(posts: list[PostRecord], media: list[Any]) -> None:
+        sizes.append(len(posts))
+        save_posts(conn, posts)
+
+    since = datetime(2026, 10, 1, 8, 5, tzinfo=UTC)
+    posts, _ = asyncio.run(
+        telegram_reader.fetch_channel(source, "chan", 0, tmp_path, since=since, on_batch=save)
+    )
+    assert [p.post_id for p in posts] == list(range(5, 46))
+    assert source.calls[0]["offset_date"] == since
+    # сохраняется по ходу: до 20-го сообщения — 19 постов, до 40-го — ещё 20, в конце — 2
+    assert sizes == [19, 20, 2]
+    assert conn.execute("SELECT COUNT(*) AS n FROM telegram_posts").fetchone()["n"] == 41
+    assert last_post_id(conn, "chan") == 45

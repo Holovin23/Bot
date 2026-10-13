@@ -3,12 +3,14 @@ Bot API не читает чужие каналы).
 
     uv run python -m bot.analyzer.telegram_reader --channel имя_канала
     uv run python -m bot.analyzer.telegram_reader --channel имя_канала --every 10
+    uv run python -m bot.analyzer.telegram_reader --since 2025-01-01   # только с этой даты
 
 При первом запуске Telegram спросит номер телефона и код из приложения; сессия
 сохраняется в data/telegram.session (не в git). Повторный запуск докачивает новые посты.
 Картинки сохраняются в data/telegram/media/<канал>/ (таблица telegram_media); в альбоме
 текст и картинки — разные сообщения с общим grouped_id. --every N — проверять канал
-каждые N минут, пока не остановите (Ctrl+C).
+каждые N минут, пока не остановите (Ctrl+C). Посты и картинки сохраняются в базу по ходу
+выгрузки (каждые 20 сообщений), поэтому остановленная выгрузка продолжится с того же места.
 """
 
 from __future__ import annotations
@@ -88,20 +90,38 @@ async def fetch_channel(
     min_id: int = 0,
     data_dir: Path | None = None,
     progress: Callable[[int, int], None] | None = None,
+    since: datetime | None = None,
+    on_batch: Callable[[list[PostRecord], list[MediaRecord]], None] | None = None,
 ) -> tuple[list[PostRecord], list[MediaRecord]]:
     """Посты и картинки с id > min_id. data_dir=None — картинки не скачиваются.
 
     Постом считается сообщение с текстом или одиночная картинка без текста; картинки
     альбома без подписи — это не отдельные посты, они привязаны к подписи по grouped_id.
-    progress(сообщений, картинок) вызывается каждые PROGRESS_EVERY сообщений.
+    since — только сообщения не раньше этой даты (UTC). progress(сообщений, картинок)
+    и on_batch(новые посты, новые картинки) — каждые PROGRESS_EVERY сообщений и в конце:
+    так скачанное сохраняется по ходу, а не только после всей выгрузки.
     """
     posts: list[PostRecord] = []
     media: list[MediaRecord] = []
+    flushed = [0, 0]  # сколько постов и картинок уже отдано в on_batch
+
+    def flush() -> None:
+        if on_batch is not None:
+            on_batch(posts[flushed[0] :], media[flushed[1] :])
+            flushed[:] = [len(posts), len(media)]
+
     seen = 0
-    async for message in source.iter_messages(channel, min_id=min_id, reverse=True):
+    kwargs: dict[str, Any] = {"min_id": min_id, "reverse": True}
+    if since is not None:
+        kwargs["offset_date"] = since  # при reverse=True — сообщения после этой даты
+    async for message in source.iter_messages(channel, **kwargs):
+        if since is not None and message.date < since:
+            continue
         seen += 1
-        if progress is not None and seen % PROGRESS_EVERY == 0:
-            progress(seen, len(media))
+        if seen % PROGRESS_EVERY == 0:
+            flush()
+            if progress is not None:
+                progress(seen, len(media))
         text = (getattr(message, "message", None) or getattr(message, "text", None) or "").strip()
         photo = getattr(message, "photo", None) is not None
         grouped = getattr(message, "grouped_id", None)
@@ -114,6 +134,7 @@ async def fetch_channel(
                 media.append(MediaRecord(channel, int(message.id), grouped, rel))
         if text or (photo and grouped is None and data_dir is not None):
             posts.append(PostRecord(channel, int(message.id), message.date.astimezone(UTC), text))
+    flush()
     return posts, media
 
 
@@ -147,7 +168,9 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Выгрузка постов Telegram-канала")
     parser.add_argument("--channel", help="имя канала без @ или ссылка (по умолчанию из конфига)")
     parser.add_argument("--every", type=float, default=0, help="повторять каждые N минут")
+    parser.add_argument("--since", help="только посты не раньше даты (UTC), например 2025-01-01")
     args = parser.parse_args(argv)
+    since = datetime.fromisoformat(args.since).replace(tzinfo=UTC) if args.since else None
     secrets = cfg.secrets
     if not secrets.tg_api_id or not secrets.tg_api_hash.get_secret_value():
         raise SystemExit("Впишите TG_API_ID и TG_API_HASH в .env (получить на my.telegram.org)")
@@ -167,20 +190,26 @@ def main(argv: list[str] | None = None) -> None:
                     f"  просмотрено сообщений: {messages}, скачано картинок: {images}", flush=True
                 )
 
-            print(f"Канал {channel}: качаю сообщения после №{start}…", flush=True)
-            return await fetch_channel(client, channel, start, data_dir, show)
+            def save(posts: list[PostRecord], media: list[MediaRecord]) -> None:
+                save_media(conn, media)
+                save_posts(conn, posts)
+
+            after = f" с {since:%Y-%m-%d}" if since else ""
+            print(f"Канал {channel}: качаю сообщения после №{start}{after}…", flush=True)
+            return await fetch_channel(client, channel, start, data_dir, show, since, save)
         finally:
             await client.disconnect()
 
     while True:
-        posts, media = asyncio.run(run(last_post_id(conn, channel)))
-        save_media(conn, media)
-        added = save_posts(conn, posts)
+        before = conn.execute(
+            "SELECT COUNT(*) AS n FROM telegram_posts WHERE channel = ?", (channel,)
+        ).fetchone()["n"]
+        _, media = asyncio.run(run(last_post_id(conn, channel)))
         total = conn.execute(
             "SELECT COUNT(*) AS n FROM telegram_posts WHERE channel = ?", (channel,)
         ).fetchone()["n"]
         print(
-            f"Новых постов: {added}, картинок: {len(media)}. "
+            f"Новых постов: {total - before}, картинок: {len(media)}. "
             f"Всего в базе по каналу {channel}: {total}"
         )
         if args.every <= 0:
