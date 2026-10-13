@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 import requests
 
-from bot.data.downloader import Downloader, RestCaller, to_ms
+from bot.data.downloader import Downloader, RestCaller, missing_spans, to_ms
 from bot.data.storage import Storage
 
 MIN = 60_000
@@ -132,3 +132,77 @@ def test_open_interest(tmp_path: Path) -> None:
     assert downloader.download_open_interest("BTCUSDT", LISTED) == expected
     assert downloader.download_open_interest("BTCUSDT", LISTED) == 0
     assert storage.read_open_interest("BTCUSDT", "5min")["time"].is_unique
+
+
+def ts(text: str) -> pd.Timestamp:
+    return pd.Timestamp(text, tz="UTC")
+
+
+def test_missing_spans_finds_head_middle_and_tail() -> None:
+    step = pd.Timedelta(minutes=1)
+    # Есть 00:10–00:19 и 03:00–03:04 (времена open). Период 00:00–05:00.
+    have = pd.Series(
+        list(pd.date_range("2024-01-01 00:10", periods=10, freq="1min", tz="UTC"))
+        + list(pd.date_range("2024-01-01 03:00", periods=5, freq="1min", tz="UTC"))
+    )
+    start, end = ts("2024-01-01 00:00"), ts("2024-01-01 05:00")
+    # Пропуски: 00:00–00:10, 00:20–03:00, 03:05–05:00. Между ними < 1000 минут — склеиваются.
+    assert missing_spans(have, start, end, step) == [(start, end)]
+    # Без склейки (порог 1 свеча) — три отдельных участка
+    import bot.data.downloader as d
+
+    old, d.KLINE_LIMIT = d.KLINE_LIMIT, 1
+    try:
+        assert missing_spans(have, start, end, step) == [
+            (start, ts("2024-01-01 00:10")),
+            (ts("2024-01-01 00:20"), ts("2024-01-01 03:00")),
+            (ts("2024-01-01 03:05"), end),
+        ]
+    finally:
+        d.KLINE_LIMIT = old
+
+
+def test_missing_spans_nothing_missing_or_nothing_stored() -> None:
+    step = pd.Timedelta(minutes=1)
+    start, end = ts("2024-01-01 00:00"), ts("2024-01-01 00:05")
+    full = pd.Series(pd.date_range(start, periods=5, freq="1min", tz="UTC"))
+    assert missing_spans(full, start, end, step) == []
+    assert missing_spans(pd.Series([], dtype="datetime64[ns, UTC]"), start, end, step) == [
+        (start, end)
+    ]
+
+
+def test_fill_klines_backfills_older_history(tmp_path: Path) -> None:
+    """Сначала загрузились только свежие сутки (как это делает график), потом нужна
+    вся история: download_klines её бы пропустил, fill_klines догружает."""
+    downloader, storage = make(tmp_path, FakeBybit())
+    downloader.download_klines("BTCUSDT", ts("2024-01-03"))
+    assert downloader.download_klines("BTCUSDT", LISTED) == 0  # старое поведение: ничего
+    added = downloader.fill_klines("BTCUSDT", LISTED, ts("2024-01-04"))
+    assert added == 2 * 1440
+    df = storage.read_candles("BTCUSDT", "1m")
+    assert len(df) == expected_candles()
+    assert df["open_time"].diff().dropna().eq(pd.Timedelta(minutes=1)).all()
+    assert downloader.fill_klines("BTCUSDT", LISTED, ts("2024-01-04")) == 0
+
+
+def test_fill_klines_starts_at_listing(tmp_path: Path) -> None:
+    class Listed(FakeBybit):
+        def get_instruments_info(self, **_: Any) -> dict[str, Any]:
+            return {"result": {"list": [{"launchTime": str(to_ms(LISTED))}]}}
+
+    client = Listed()
+    downloader, _ = make(tmp_path, client)
+    assert downloader.fill_klines("BTCUSDT", ts("2021-01-01"), ts("2024-01-02")) == 1440
+    calls = client.calls
+    # Повтор: до листинга свечей нет, но запросов туда больше нет
+    assert downloader.fill_klines("BTCUSDT", ts("2021-01-01"), ts("2024-01-02")) == 0
+    assert client.calls == calls
+
+
+def test_fill_funding_range(tmp_path: Path) -> None:
+    downloader, storage = make(tmp_path, FakeBybit())
+    # [02.01 00:00, 03.01 00:00): выплаты в 00, 08, 16 второго числа
+    assert downloader.fill_funding("BTCUSDT", ts("2024-01-02"), ts("2024-01-03")) == 3
+    times = storage.read_funding("BTCUSDT")["time"]
+    assert times.min() == ts("2024-01-02")

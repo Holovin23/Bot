@@ -122,6 +122,28 @@ def parse_open_interest(response: dict[str, Any]) -> pd.DataFrame:
     ).sort_values("time", ignore_index=True)
 
 
+def missing_spans(
+    have: pd.Series, start: pd.Timestamp, end: pd.Timestamp, step: pd.Timedelta
+) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    """Участки [a, b) внутри [start, end), где нет ни одной свечи. Соседние участки,
+    между которыми меньше KLINE_LIMIT свечей, склеиваются: так меньше запросов, а
+    повторно скачанные свечи хранилище просто заменит."""
+    times = pd.DatetimeIndex(have).sort_values()
+    times = times[(times >= start) & (times < end)]
+    # Границы: «свеча» до start и после end, чтобы края тоже считались пропусками.
+    edges = pd.DatetimeIndex([start - step]).append(times).append(pd.DatetimeIndex([end]))
+    gap_starts = edges[:-1] + step
+    gap_ends = edges[1:]
+    holes = gap_ends > gap_starts
+    spans: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+    for a, b in zip(gap_starts[holes], gap_ends[holes], strict=True):
+        if spans and a - spans[-1][1] < step * KLINE_LIMIT:
+            spans[-1] = (spans[-1][0], b)
+        else:
+            spans.append((a, b))
+    return spans
+
+
 class Downloader:
     def __init__(
         self,
@@ -131,6 +153,7 @@ class Downloader:
         now: Callable[[], pd.Timestamp] = lambda: pd.Timestamp.now(tz="UTC"),
         category: str = "linear",
         progress_every: int = 20,
+        say: Callable[[str], None] = print,
     ) -> None:
         self.client = client
         self.storage = storage
@@ -138,6 +161,8 @@ class Downloader:
         self.now = now
         self.category = category
         self.progress_every = progress_every
+        self.say = say  # куда писать ход загрузки (консоль или задача веб-интерфейса)
+        self._listing: dict[str, pd.Timestamp | None] = {}
 
     def download_klines(self, symbol: str, start: pd.Timestamp, timeframe: str = "1m") -> int:
         """Свечи от start (или от последней сохранённой) до последней закрытой."""
@@ -146,12 +171,21 @@ class Downloader:
         begin = max(start, last + pd.Timedelta(minutes=step)) if last is not None else start
         # Свеча закрыта, если open_time + длительность <= сейчас.
         cutoff = self.now().floor(f"{step}min")  # open_time текущей (незакрытой) свечи
+        self.say(f"{symbol} {timeframe}: загрузка с {begin:%Y-%m-%d %H:%M} UTC")
+        total = self._klines_window(symbol, timeframe, begin, cutoff)
+        self.say(f"{symbol} {timeframe}: готово, новых свечей {total}")
+        return total
+
+    def _klines_window(
+        self, symbol: str, timeframe: str, begin: pd.Timestamp, stop: pd.Timestamp
+    ) -> int:
+        """Свечи с open_time в [begin, stop); stop не позже текущей незакрытой свечи."""
+        step = timeframe_minutes(timeframe)
         window_ms = KLINE_LIMIT * step * MINUTE_MS
         cursor = to_ms(begin)
         total, requests_done = 0, 0
-        print(f"{symbol} {timeframe}: загрузка с {begin:%Y-%m-%d %H:%M} UTC")
-        while cursor < to_ms(cutoff):
-            end = min(cursor + window_ms, to_ms(cutoff)) - 1
+        while cursor < to_ms(stop):
+            end = min(cursor + window_ms, to_ms(stop)) - 1
             response = self.caller.call(
                 self.client.get_kline,
                 category=self.category,
@@ -162,14 +196,90 @@ class Downloader:
                 limit=KLINE_LIMIT,
             )
             df = parse_klines(response)
-            df = df[(df["open_time"] >= from_ms(cursor)) & (df["open_time"] < cutoff)]
+            df = df[(df["open_time"] >= from_ms(cursor)) & (df["open_time"] < stop)]
             total += self.storage.write_candles(symbol, timeframe, df)
             cursor = end + 1
             requests_done += 1
             if requests_done % self.progress_every == 0:
-                self._progress(symbol, timeframe, begin, from_ms(cursor), cutoff, total)
-        print(f"{symbol} {timeframe}: готово, новых свечей {total}")
+                self._progress(symbol, timeframe, begin, from_ms(cursor), stop, total)
         return total
+
+    def listing_time(self, symbol: str) -> pd.Timestamp | None:
+        """Когда инструмент появился на Bybit (launchTime). None — неизвестно."""
+        if symbol not in self._listing:
+            value: pd.Timestamp | None = None
+            get_info = getattr(self.client, "get_instruments_info", None)
+            if get_info is not None:
+                try:
+                    response = self.caller.call(get_info, category=self.category, symbol=symbol)
+                    items = response["result"]["list"]
+                    if items and items[0].get("launchTime"):
+                        value = from_ms(int(items[0]["launchTime"]))
+                except (FailedRequestError, requests.RequestException, KeyError, ValueError):
+                    value = None
+            self._listing[symbol] = value
+        return self._listing[symbol]
+
+    def fill_klines(
+        self, symbol: str, start: pd.Timestamp, end: pd.Timestamp, timeframe: str = "1m"
+    ) -> int:
+        """Догрузить все пропуски в [start, end) — и в начале, и в середине, и в конце.
+
+        download_klines продолжает только с последней сохранённой свечи: если сначала
+        загрузились свежие дни (например, графиком), старую историю он уже не догрузит.
+        """
+        step = pd.Timedelta(minutes=timeframe_minutes(timeframe))
+        listed = self.listing_time(symbol)
+        begin = max(start, listed.ceil(step)) if listed is not None else start
+        stop = min(end, self.now().floor(step))
+        if begin >= stop:
+            return 0
+        have = self.storage.read_candles(symbol, timeframe, begin, stop)["open_time"]
+        spans = missing_spans(have, begin, stop, step)
+        if not spans:
+            return 0
+        missing = sum((b - a) // step for a, b in spans)
+        self.say(
+            f"{symbol} {timeframe}: не хватает {missing} свечей за {begin:%Y-%m-%d} — "
+            f"{stop:%Y-%m-%d}, загружаю ({len(spans)} участков)"
+        )
+        total = 0
+        for a, b in spans:
+            total += self._klines_window(symbol, timeframe, a, b)
+        self.say(f"{symbol} {timeframe}: готово, новых свечей {total}")
+        return total
+
+    def fill_funding(self, symbol: str, start: pd.Timestamp, end: pd.Timestamp) -> int:
+        """Funding за [start, end): страницы назад от end (повторы хранилище заменит)."""
+        end_ms = to_ms(min(end, self.now())) - 1
+        pages = []
+        while end_ms >= to_ms(start):
+            response = self.caller.call(
+                self.client.get_funding_rate_history,
+                category=self.category,
+                symbol=symbol,
+                endTime=end_ms,
+                limit=FUNDING_LIMIT,
+            )
+            df = parse_funding(response)
+            df = df[df["time"] >= start]
+            if df.empty:
+                break
+            pages.append(df)
+            if len(response["result"]["list"]) < FUNDING_LIMIT:
+                break
+            end_ms = to_ms(df["time"].min()) - 1
+        total = 0
+        if pages:
+            total = self.storage.write_funding(symbol, pd.concat(pages, ignore_index=True))
+        self.say(f"{symbol} funding: готово, новых записей {total}")
+        return total
+
+    def ensure_history(self, symbol: str, start: pd.Timestamp, end: pd.Timestamp) -> int:
+        """1m-свечи и funding за период — всё, что нужно бэктесту и боту."""
+        added = self.fill_klines(symbol, start, end, "1m")
+        self.fill_funding(symbol, start, end)
+        return added
 
     def download_funding(self, symbol: str, start: pd.Timestamp) -> int:
         """Funding по фактическим временам. Bybit отдаёт историю страницами назад от endTime,
@@ -198,7 +308,7 @@ class Downloader:
         total = 0
         if pages:
             total = self.storage.write_funding(symbol, pd.concat(pages, ignore_index=True))
-        print(f"{symbol} funding: готово, новых записей {total}")
+        self.say(f"{symbol} funding: готово, новых записей {total}")
         return total
 
     def download_open_interest(
@@ -212,7 +322,7 @@ class Downloader:
         cursor = to_ms(begin)
         total, requests_done = 0, 0
         first_seen: pd.Timestamp | None = None
-        print(f"{symbol} open interest {interval}: загрузка с {begin:%Y-%m-%d %H:%M} UTC")
+        self.say(f"{symbol} open interest {interval}: загрузка с {begin:%Y-%m-%d %H:%M} UTC")
         while cursor < to_ms(cutoff):
             end = min(cursor + window_ms, to_ms(cutoff)) - 1
             response = self.caller.call(
@@ -229,17 +339,17 @@ class Downloader:
             if first_seen is None and not df.empty:
                 first_seen = df["time"].min()
                 if last is None and first_seen > begin + pd.Timedelta(days=1):
-                    print(f"{symbol} open interest: история начинается только с {first_seen}")
+                    self.say(f"{symbol} open interest: история начинается только с {first_seen}")
             total += self.storage.write_open_interest(symbol, interval, df)
             cursor = end + 1
             requests_done += 1
             if requests_done % self.progress_every == 0:
                 self._progress(symbol, f"OI {interval}", begin, from_ms(cursor), cutoff, total)
-        print(f"{symbol} open interest {interval}: готово, новых записей {total}")
+        self.say(f"{symbol} open interest {interval}: готово, новых записей {total}")
         return total
 
-    @staticmethod
     def _progress(
+        self,
         symbol: str,
         what: str,
         begin: pd.Timestamp,
@@ -249,7 +359,7 @@ class Downloader:
     ) -> None:
         span = (cutoff - begin).total_seconds() or 1.0
         percent = 100 * (position - begin).total_seconds() / span
-        print(f"  {symbol} {what}: до {position:%Y-%m-%d %H:%M} UTC ({percent:5.1f}%), +{total}")
+        self.say(f"  {symbol} {what}: до {position:%Y-%m-%d %H:%M} UTC ({percent:5.1f}%), +{total}")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -257,6 +367,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Загрузка истории Bybit в data/")
     parser.add_argument("--symbol", action="append", help="символ; можно несколько раз")
     parser.add_argument("--from", dest="start", default=cfg.data.history_start)
+    parser.add_argument("--to", dest="end", help="по какую дату включительно (иначе — сейчас)")
     parser.add_argument(
         "--only",
         choices=["klines", "funding", "oi"],
@@ -269,13 +380,16 @@ def main(argv: list[str] | None = None) -> None:
     storage = Storage(cfg.resolve(cfg.data.dir))
     downloader = Downloader(make_public_client(), storage, category=cfg.data.category)
     start = pd.Timestamp(args.start, tz="UTC")
+    now = pd.Timestamp.now(tz="UTC")
+    end = pd.Timestamp(args.end, tz="UTC") + pd.Timedelta(days=1) if args.end else now
     parts = args.only or ["klines", "funding", "oi"]
 
     for symbol in args.symbol or cfg.data.symbols:
+        # fill_*: догружаются все пропуски периода, а не только хвост после последней свечи
         if "klines" in parts:
-            downloader.download_klines(symbol, start, cfg.data.base_interval)
+            downloader.fill_klines(symbol, start, end, cfg.data.base_interval)
         if "funding" in parts:
-            downloader.download_funding(symbol, start)
+            downloader.fill_funding(symbol, start, end)
         if "oi" in parts:
             downloader.download_open_interest(symbol, start, cfg.data.open_interest_interval)
 
