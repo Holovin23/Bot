@@ -173,7 +173,7 @@
   // Сервер отдаёт время в UTC; на графике сдвигаем на часовой пояс компьютера.
   const local = (t) => t - new Date(t * 1000).getTimezoneOffset() * 60;
   const utcDay = (text) => text ? Date.parse(text + "T00:00:00Z") / 1000 : null;
-  const TF_SECONDS = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400 };
+  const TF_SECONDS = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400 };
 
   async function api(path, options = {}) {
     const opts = { ...options };

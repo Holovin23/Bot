@@ -25,7 +25,7 @@ from bot.app.jobs import Job, JobRunner
 from bot.core.config import PROJECT_ROOT
 from bot.strategies.registry import STRATEGIES
 
-TIMEFRAMES = ("1m", "5m", "15m", "1h", "4h")
+TIMEFRAMES = ("1m", "5m", "15m", "1h", "4h", "1d")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 KV_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=[^\n\r]{0,200}$")
 TEXT_RE = re.compile(r"^[^\n\r\-][^\n\r]{0,199}$")  # не с «-»: иначе это был бы новый флаг

@@ -8,12 +8,14 @@ from bot.strategies.base import BaseStrategy
 from bot.strategies.composite import Composite
 from bot.strategies.mean_reversion import MeanReversion
 from bot.strategies.random_entry import RandomEntry
+from bot.strategies.time_series_momentum import TimeSeriesMomentum
 from bot.strategies.trend_following import TrendFollowing
 
 STRATEGIES: dict[str, type[BaseStrategy]] = {
     Composite.name: Composite,
     MeanReversion.name: MeanReversion,
     RandomEntry.name: RandomEntry,
+    TimeSeriesMomentum.name: TimeSeriesMomentum,
     TrendFollowing.name: TrendFollowing,
 }
 
