@@ -4,14 +4,20 @@
         --timeframe 1h --from 2021-01-01 --to 2024-06-30
 
 Результат: data/backtests/<время>_<стратегия>_<символ>_<таймфрейм>/
-report.md (метрики и 10 сделок с пошаговым расчётом), trades.csv, equity.csv.
+report.md (метрики и 10 сделок с пошаговым расчётом), trades.csv, equity.csv, а также
+журнал для разбора (в том числе ИИ): run.json (настройки, период, издержки, метрики),
+trades.jsonl (каждая сделка с причиной входа, признаками, переносами стопа и расчётом
+результата), skipped.jsonl (пропущенные сигналы и почему). Краткая строка о запуске
+дописывается в logs/journal/backtests.jsonl.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import random
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,6 +30,7 @@ from bot.backtest.costs import CostModel
 from bot.backtest.engine import BacktestResult, BacktestTrade, run_backtest
 from bot.backtest.metrics import Metrics, compute_metrics
 from bot.core.config import Config, RiskConfig, load_config
+from bot.core.journal import Journal, to_jsonable, write_jsonl
 from bot.core.models import Side
 from bot.data.storage import Storage
 from bot.strategies.registry import create_strategy
@@ -200,8 +207,81 @@ def render_report(
     return "\n".join(lines)
 
 
+def trade_record(trade: BacktestTrade, number: int) -> dict[str, Any]:
+    """Сделка для trades.jsonl: всё, что нужно, чтобы пересчитать её вручную."""
+    return {
+        "number": number,
+        "signal_id": trade.signal_id,
+        "side": trade.side.value,
+        "reason": trade.reason,
+        "features": trade.features,
+        "signal_time": trade.signal_time,
+        "signal_price": trade.signal_price,
+        "entry_time": trade.entry_time,
+        "entry_price_raw": trade.entry_price_raw,
+        "entry_price": trade.entry_price,
+        "qty": trade.qty,
+        "initial_stop": trade.initial_stop,
+        "take": trade.take,
+        "time_stop_bars": trade.time_stop_bars,
+        "risk_amount": trade.risk_amount,
+        "stop_moves": [{"time": t, "stop": s} for t, s in trade.stop_moves],
+        "final_stop": trade.stop,
+        "exit_time": trade.exit_time,
+        "exit_reason": trade.exit_reason,
+        "exit_price_raw": trade.exit_price_raw,
+        "exit_price": trade.exit_price,
+        "gap_exit": trade.gap_exit,
+        "bars_held": trade.bars_held,
+        "entry_fee": trade.entry_fee,
+        "exit_fee": trade.exit_fee,
+        "slippage": trade.slippage_cost,
+        "funding": trade.funding,
+        "funding_events": trade.funding_events,
+        "gross_pnl": trade.gross_pnl,
+        "net_pnl": trade.net_pnl,
+        "r_multiple": trade.r_multiple,
+    }
+
+
+def run_record(
+    result: BacktestResult, metrics: Metrics, ctx: ReportContext, folder: Path
+) -> dict[str, Any]:
+    costs = ctx.costs
+    return {
+        "backtest_id": folder.name,
+        "created": datetime.now(UTC),
+        "strategy": result.strategy,
+        "strategy_version": result.strategy_version,
+        "params": result.params,
+        "symbol": result.symbol,
+        "timeframe": result.timeframe,
+        "period": {"start": ctx.start, "end_exclusive": ctx.end},
+        "initial_capital": result.initial_capital,
+        "final_equity": result.final_equity,
+        "risk": ctx.risk.model_dump(),
+        "costs": {
+            "taker_fee": costs.taker_fee,
+            "slippage": costs.slippage_rate(result.symbol),
+            "stop_slippage": costs.slippage_rate(result.symbol, stop=True),
+        },
+        "rules": {
+            "entry": "по open первой 1m-свечи после закрытия сигнальной свечи",
+            "stop_take": "проверка по 1m-свечам; стоп раньше тейка в одной минуте",
+            "funding": "выплаты по истории Bybit, позиция открыта: entry < t <= exit",
+        },
+        "metrics": metrics,
+        "skipped_signals": len(result.skipped),
+        "files": ["report.md", "trades.csv", "trades.jsonl", "skipped.jsonl", "equity.csv"],
+    }
+
+
 def save_report(
-    result: BacktestResult, metrics: Metrics, ctx: ReportContext, out_root: Path
+    result: BacktestResult,
+    metrics: Metrics,
+    ctx: ReportContext,
+    out_root: Path,
+    journal: Journal | None = None,
 ) -> Path:
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     folder = out_root / f"{stamp}_{result.strategy}_{result.symbol}_{result.timeframe}"
@@ -209,6 +289,43 @@ def save_report(
     (folder / "report.md").write_text(render_report(result, metrics, ctx), encoding="utf-8")
     trades_frame(result).to_csv(folder / "trades.csv", index=False)
     result.equity.to_csv(folder / "equity.csv", index=False)
+    ordered = sorted(result.trades, key=lambda t: t.entry_time)
+    write_jsonl(
+        folder / "trades.jsonl", [trade_record(t, n) for n, t in enumerate(ordered, start=1)]
+    )
+    write_jsonl(
+        folder / "skipped.jsonl",
+        [
+            {
+                "signal_id": s.signal_id,
+                "why_skipped": s.reason,
+                "signal": s.signal.model_dump(mode="json") if s.signal is not None else None,
+            }
+            for s in result.skipped
+        ],
+    )
+    record = run_record(result, metrics, ctx, folder)
+    (folder / "run.json").write_text(
+        json.dumps(to_jsonable(record), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    if journal is not None:
+        m = metrics
+        journal.write(
+            "backtest",
+            backtest_id=folder.name,
+            folder=str(folder),
+            strategy=result.strategy,
+            params=result.params,
+            symbol=result.symbol,
+            timeframe=result.timeframe,
+            start=ctx.start,
+            end_exclusive=ctx.end,
+            trades=m.trades,
+            profit_factor=m.profit_factor,
+            expectancy_r=m.expectancy_r,
+            total_return_pct=m.total_return_pct,
+            max_drawdown_pct=m.max_drawdown_pct,
+        )
     return folder
 
 
@@ -230,18 +347,34 @@ def run_report(
     start: pd.Timestamp,
     end: pd.Timestamp,
     params: dict[str, Any] | None = None,
+    say: Callable[[str], None] | None = None,
 ) -> tuple[Path, Metrics]:
     """Бэктест на сохранённых данных и отчёт в data/backtests. Общий код для командной
-    строки и для запуска из веб-интерфейса."""
+    строки и для запуска из веб-интерфейса. say — куда писать ход работы."""
+    say = say or (lambda _text: None)
     data_dir = cfg.resolve(cfg.data.dir)
     storage = Storage(data_dir)
     if symbol not in cfg.instruments:
         raise ValueError(f"Нет параметров инструмента {symbol} в config/default.yaml")
     candles = storage.read_candles(symbol, "1m", start, end)
     if candles.empty:
-        raise ValueError(f"Нет 1m-свечей {symbol} за период. Сначала загрузите историю.")
+        raise ValueError(
+            f"Нет 1m-свечей {symbol} за {start:%Y-%m-%d} — "
+            f"{end - pd.Timedelta(days=1):%Y-%m-%d}. Загрузите историю за этот период "
+            "(вкладка «Данные» или python -m bot.data.downloader)."
+        )
+    expected = int((end - start) / pd.Timedelta(minutes=1))
+    if len(candles) < 0.95 * expected:
+        first, last = candles["open_time"].iloc[0], candles["open_time"].iloc[-1]
+        say(
+            f"внимание: есть {len(candles)} из {expected} минутных свечей "
+            f"({first:%Y-%m-%d} — {last:%Y-%m-%d}); бэктест идёт на том, что есть"
+        )
     funding = storage.read_funding(symbol, start, end)
+    if funding.empty:
+        say("внимание: нет истории funding за период — бэктест без funding")
     strategy = create_strategy(strategy_name, timeframe, params)
+    say(f"бэктест {strategy_name} {symbol} {timeframe}: {len(candles)} минутных свечей")
     costs = CostModel.from_config(cfg.costs)
     result = run_backtest(
         strategy,
@@ -256,7 +389,10 @@ def run_report(
     )
     metrics = compute_metrics(result, candles["close"])
     ctx = ReportContext(start=start, end=end, costs=costs, risk=cfg.risk)
-    return save_report(result, metrics, ctx, data_dir / "backtests"), metrics
+    journal = Journal(cfg.resolve(cfg.logging.dir) / "journal" / "backtests.jsonl")
+    folder = save_report(result, metrics, ctx, data_dir / "backtests", journal)
+    say(f"сделок {metrics.trades}, отчёт: {folder}")
+    return folder, metrics
 
 
 def main(argv: list[str] | None = None) -> None:

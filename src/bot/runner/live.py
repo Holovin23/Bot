@@ -18,7 +18,7 @@ from __future__ import annotations
 import argparse
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -28,6 +28,7 @@ import pandas as pd
 from bot.backtest.costs import CostModel
 from bot.core.config import PROJECT_ROOT, Config, load_config
 from bot.core.db import connect, db_path
+from bot.core.journal import Journal
 from bot.core.logging import get_logger, setup_logging
 from bot.core.models import Order, OrderStatus, Position, Side, Signal
 from bot.core.timeframes import timeframe_delta
@@ -81,6 +82,11 @@ def build_strategy(instance: Instance, models_dir: Path) -> Strategy:
     return strategy
 
 
+def _trade_fields(trade: LiveTrade) -> dict[str, Any]:
+    """Сделка для журнала: всё, кроме сырого JSON сигнала (он уже записан в signal)."""
+    return {k: v for k, v in asdict(trade).items() if k != "signal_json"}
+
+
 def bar_closes_at(minute_open: pd.Timestamp, timeframe: str) -> bool:
     """Закрылась ли свеча таймфрейма вместе с 1m-свечой minute_open."""
     end = minute_open + MINUTE
@@ -99,7 +105,11 @@ class LiveBot:
         notify: Notify = print,
         now: Callable[[], pd.Timestamp] = lambda: pd.Timestamp.now(tz="UTC"),
         strategies: list[Running] | None = None,
+        journal: Journal | None = None,
+        control_dir: Path | None = None,
     ) -> None:
+        """journal — подробный JSONL-журнал для разбора сделок; control_dir — папка файлов
+        KILL и RESUME (по умолчанию data/; у ботов из веб-интерфейса — своя папка)."""
         self.cfg = cfg
         self.settings = settings
         self.broker = broker
@@ -112,7 +122,8 @@ class LiveBot:
         self.running = strategies or [
             Running(i, build_strategy(i, models_dir)) for i in settings.instances
         ]
-        self.kill_file = storage.root / KILL_FILE
+        self.journal = journal
+        self.kill_file = (control_dir or storage.root) / KILL_FILE
         self.last_minute: dict[str, pd.Timestamp] = {}
         self.minutes_seen = 0
         self.state: RiskState | None = None
@@ -140,9 +151,15 @@ class LiveBot:
         self.event("start", f"бот запущен ({self.broker.name}): {names}")
         self.notify(f"Бот запущен в режиме {self.broker.name}: {names}")
 
+    @property
+    def _cash_key(self) -> str:
+        return f"{PAPER_CASH_KEY}:{self.store.mode}"
+
     def _restore_paper(self) -> None:
         assert isinstance(self.broker, PaperBroker)
-        cash = self.store.get_value(PAPER_CASH_KEY)
+        cash = self.store.get_value(self._cash_key)
+        if cash is None and self.store.mode == "paper":
+            cash = self.store.get_value(PAPER_CASH_KEY)  # ключ до появления нескольких ботов
         positions = [
             Position(
                 symbol=t.symbol,
@@ -189,11 +206,17 @@ class LiveBot:
 
     def _save_paper_cash(self) -> None:
         if isinstance(self.broker, PaperBroker):
-            self.store.set_value(PAPER_CASH_KEY, repr(self.broker.cash))
+            self.store.set_value(self._cash_key, repr(self.broker.cash))
 
     def event(self, kind: str, message: str, level: str = "info") -> None:
         self.store.add_event(kind, message, level)
         getattr(log, "warning" if level != "info" else "info")(kind, message=message)
+        self.log("event", event=kind, level=level, message=message)
+
+    def log(self, kind: str, **fields: Any) -> None:
+        """Строка в JSONL-журнал (если он подключён)."""
+        if self.journal is not None:
+            self.journal.write(kind, **fields)
 
     # --- поток свечей -----------------------------------------------------------------
 
@@ -278,6 +301,7 @@ class LiveBot:
         for signal_id in before:
             trade = self.store.get_trade(signal_id)
             if trade is not None and trade.status == "closed":
+                self.log("trade_closed", source="reconcile", trade=_trade_fields(trade))
                 self.notify(
                     f"Закрыта {trade.symbol} {trade.side} ({trade.exit_reason}): "
                     f"{(trade.net_pnl or 0):+.2f} USDT"
@@ -308,10 +332,23 @@ class LiveBot:
             return
         ctx, atr_value = built
         trade = self._trade_for(running)
+        self.log(
+            "bar",
+            strategy=running.strategy.name,
+            symbol=running.instance.symbol,
+            timeframe=running.strategy.timeframe,
+            bar_open=ctx.time,
+            bar=ctx.bar,
+            features=ctx.feature,
+            atr=atr_value,
+            open_trade=trade.signal_id if trade is not None else None,
+        )
         if trade is not None:
             self.manage_open(running, ctx, trade)
             return
         signals = [s for s in running.strategy.on_bar(ctx) if s.symbol == running.instance.symbol]
+        for signal in signals:
+            self.log("signal", signal=signal, used=signal is signals[0])
         if signals:
             self.try_open(signals[0], ctx, atr_value)
 
@@ -327,6 +364,7 @@ class LiveBot:
         bars_held = trade.bars_held + 1
         self.store.update_trade(trade.signal_id, bars_held=bars_held)
         if trade.time_stop_bars is not None and bars_held >= trade.time_stop_bars:
+            self.log("time_exit", signal_id=trade.signal_id, bars_held=bars_held)
             self.close(trade, "time")
             return
         position = Position(
@@ -351,6 +389,7 @@ class LiveBot:
             self.event("trail", f"{trade.signal_id}: стоп не перенесён: {exc}", "error")
             return
         self.store.update_trade(trade.signal_id, stop=float(new_stop))
+        self.log("stop_moved", signal_id=trade.signal_id, old=trade.stop, new=float(new_stop))
         self.event("trail", f"{trade.signal_id}: стоп {trade.stop:g} → {new_stop:g}")
 
     def try_open(self, signal: Signal, ctx: MarketContext, atr_value: float) -> None:
@@ -375,6 +414,18 @@ class LiveBot:
             risk=self.cfg.risk,
             limits=self.cfg.limits,
         )
+        self.log(
+            "risk_decision",
+            signal_id=signal.signal_id,
+            approved=decision.approved,
+            reasons=decision.reasons,
+            notes=decision.notes,
+            qty=decision.qty,
+            risk_amount=decision.risk_amount,
+            equity=state.equity,
+            open_risks=open_risks,
+            atr=atr_value,
+        )
         if not decision.approved:
             self.event("risk", f"{signal.signal_id} отклонён: {'; '.join(decision.reasons)}")
             return
@@ -386,22 +437,36 @@ class LiveBot:
         self.store.add_trade(signal, qty, risk_amount)
         request = entry_request(signal, qty)
         self.store.order_sent(request)
+        self.log("order_sent", purpose="entry", request=request)
         try:
             order = submit_with_retry(self.broker, request)
         except OrderRejectedError as exc:
+            self.log("order_rejected", order_link_id=request.order_link_id, error=str(exc))
             self.store.order_failed(request.order_link_id, str(exc))
             self.store.update_trade(signal.signal_id, status="failed")
             self.event("order", f"{signal.signal_id}: биржа отклонила вход: {exc}", "error")
             self.notify(f"Ордер отклонён {signal.symbol}: {exc}")
             return
         except BrokerError as exc:
+            self.log("order_unknown", order_link_id=request.order_link_id, error=str(exc))
             # Неизвестно, дошёл ли ордер: сделка остаётся pending, решит сверка.
             self.event("order", f"{signal.signal_id}: нет ответа биржи: {exc}", "error")
             self.notify(f"Нет ответа биржи по {signal.symbol}, сверка уточнит: {exc}")
             return
         self.store.order_result(order)
+        self.log("order_result", order=order)
         if order.status is OrderStatus.FILLED:
             self._mark_open(signal, order)
+            self.log(
+                "trade_opened",
+                signal_id=signal.signal_id,
+                fill_price=order.avg_fill_price,
+                signal_price=signal.entry_price,
+                qty=qty,
+                stop=signal.stop_loss,
+                take=signal.take_profit,
+                risk_amount=risk_amount,
+            )
         self.event(
             "order",
             f"вход {signal.symbol} {signal.side.value} {qty:g} по {order.avg_fill_price or '?'}, "
@@ -427,9 +492,11 @@ class LiveBot:
             attempt += 1
         request = close_request(trade.symbol, Side(trade.side), trade.qty, trade.signal_id, attempt)
         self.store.order_sent(request)
+        self.log("order_sent", purpose=f"close:{reason}", request=request)
         try:
             order = submit_with_retry(self.broker, request)
         except BrokerError as exc:
+            self.log("order_failed", order_link_id=request.order_link_id, error=str(exc))
             self.store.order_failed(request.order_link_id, str(exc))
             self.event("order", f"{trade.signal_id}: не закрыта ({reason}): {exc}", "error")
             self.notify(f"Не удалось закрыть {trade.symbol}: {exc}")
@@ -444,6 +511,10 @@ class LiveBot:
             exit_reason=reason,
             net_pnl=info.net_pnl if info else None,
         )
+        self.log("order_result", order=order)
+        closed = self.store.get_trade(trade.signal_id)
+        if closed is not None:
+            self.log("trade_closed", source="bot", trade=_trade_fields(closed))
         self.refresh_state()
         self.record(info.net_pnl if info else 0.0)
         pnl = f"{info.net_pnl:+.2f} USDT" if info else "итог уточнит сверка"
@@ -593,7 +664,10 @@ def main(argv: list[str] | None = None) -> None:
     from bot.notify.telegram import TelegramNotifier
 
     notifier = TelegramNotifier.from_secrets(cfg.secrets)
-    bot = LiveBot(cfg, settings, broker, store, storage, notify=notifier.send)
+    account = "live" if live else settings.mode
+    journal_path = cfg.resolve(cfg.logging.dir) / "journal" / f"{account}.jsonl"
+    journal = Journal(journal_path, account=account)
+    bot = LiveBot(cfg, settings, broker, store, storage, notify=notifier.send, journal=journal)
     downloader = Downloader(make_public_client(), storage, category=cfg.data.category)
     feed = LiveFeed(storage, downloader, settings.symbols, on_candle=bot.on_candles)
     for symbol in settings.symbols:  # сначала догрузить историю, потом стартовать
