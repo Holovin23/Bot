@@ -47,3 +47,43 @@ def test_fetch_and_save(tmp_path: Path) -> None:
 def test_record_is_plain_data() -> None:
     p = PostRecord("c", 1, datetime(2026, 1, 1, tzinfo=UTC), "t")
     assert p.channel == "c"
+
+
+class FakeMediaTelegram(FakeTelegram):
+    async def download_media(self, message: Any, file: str) -> str:
+        path = Path(file + ".jpg")
+        path.write_bytes(b"jpg")
+        return str(path)
+
+
+def photo(i: int, text: str | None, grouped: int | None = None) -> SimpleNamespace:
+    m = msg(i, text)
+    m.photo = object()
+    m.grouped_id = grouped
+    return m
+
+
+def test_images_and_albums(tmp_path: Path) -> None:
+    from bot.analyzer.telegram_reader import fetch_channel, post_images, save_media
+
+    conn = connect(tmp_path / "bot.sqlite")
+    source = FakeMediaTelegram(
+        [
+            photo(1, "BTC: график", grouped=77),  # подпись альбома
+            photo(2, None, grouped=77),  # вторая картинка альбома — не отдельный пост
+            photo(3, None),  # одиночная картинка без текста — пост
+            msg(4, "просто текст"),
+        ]
+    )
+    posts, media = asyncio.run(fetch_channel(source, "chan", 0, tmp_path))
+    assert [p.post_id for p in posts] == [1, 3, 4]
+    assert [m.path for m in media] == [f"telegram/media/chan/{i}.jpg" for i in (1, 2, 3)]
+    save_posts(conn, posts)
+    assert save_media(conn, media) == 3
+    assert post_images(conn, "chan", 1) == [
+        "telegram/media/chan/1.jpg",
+        "telegram/media/chan/2.jpg",
+    ]
+    assert post_images(conn, "chan", 3) == ["telegram/media/chan/3.jpg"]
+    assert post_images(conn, "chan", 4) == []
+    assert last_post_id(conn, "chan") == 4
