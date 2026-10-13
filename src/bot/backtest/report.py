@@ -339,6 +339,9 @@ def _parse_params(items: list[str] | None) -> dict[str, Any]:
     return params
 
 
+MIN_COVERAGE = 0.95  # доля минутных свечей после первой, без которой бэктест не запускаем
+
+
 def run_report(
     cfg: Config,
     strategy_name: str,
@@ -363,12 +366,21 @@ def run_report(
             f"{end - pd.Timedelta(days=1):%Y-%m-%d}. Загрузите историю за этот период "
             "(вкладка «Данные» или python -m bot.data.downloader)."
         )
-    expected = int((end - start) / pd.Timedelta(minutes=1))
-    if len(candles) < 0.95 * expected:
-        first, last = candles["open_time"].iloc[0], candles["open_time"].iloc[-1]
+    first, last = candles["open_time"].iloc[0], candles["open_time"].iloc[-1]
+    # Начало периода может быть раньше листинга монеты — такую «дыру» не считаем.
+    # После первой свечи данных должно быть почти всё: иначе результат вводит в заблуждение.
+    now = pd.Timestamp.now(tz="UTC").floor("1min")
+    expected = int((min(end, now) - max(start, first)) / pd.Timedelta(minutes=1))
+    if len(candles) < MIN_COVERAGE * expected:
+        raise ValueError(
+            f"Есть только {len(candles)} из {expected} минутных свечей {symbol} "
+            f"({first:%Y-%m-%d} — {last:%Y-%m-%d}, {len(candles) / expected:.0%}). "
+            "Бэктест на неполных данных не запускаю: догрузите историю и повторите."
+        )
+    if first > start:
         say(
-            f"внимание: есть {len(candles)} из {expected} минутных свечей "
-            f"({first:%Y-%m-%d} — {last:%Y-%m-%d}); бэктест идёт на том, что есть"
+            f"внимание: свечи {symbol} начинаются с {first:%Y-%m-%d} "
+            "(раньше монеты на Bybit не было или история не загружена)"
         )
     funding = storage.read_funding(symbol, start, end)
     if funding.empty:

@@ -173,7 +173,7 @@
   // Сервер отдаёт время в UTC; на графике сдвигаем на часовой пояс компьютера.
   const local = (t) => t - new Date(t * 1000).getTimezoneOffset() * 60;
   const utcDay = (text) => text ? Date.parse(text + "T00:00:00Z") / 1000 : null;
-  const TF_SECONDS = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400 };
+  const TF_SECONDS = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400 };
 
   async function api(path, options = {}) {
     const opts = { ...options };
@@ -238,7 +238,7 @@
     views: {},              // состояние каждой вкладки графика
   };
   const STRATEGY_TITLES = {
-    trend_following: "Trend Following", mean_reversion: "Mean Reversion", breakout: "Breakout",
+    trend_following: "Trend Following", mean_reversion: "Mean Reversion", time_series_momentum: "Daily Momentum",
     composite: "Composite", random_entry: "Random (база)",
   };
 
@@ -261,7 +261,7 @@
   // ===================== главные вкладки =====================
   function renderNav() {
     const items = [["overview", "Обзор"]];
-    const order = ["trend_following", "mean_reversion", "breakout", "composite", "random_entry"];
+    const order = ["trend_following", "time_series_momentum", "mean_reversion", "composite", "random_entry"];
     const rank = (n) => (order.includes(n) ? order.indexOf(n) : order.length);
     const names = app.strategies.map((s) => s.name).sort((a, b) => rank(a) - rank(b));
     for (const name of names) items.push([name, STRATEGY_TITLES[name] || name]);

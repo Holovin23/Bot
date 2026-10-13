@@ -41,3 +41,21 @@ def resample_candles(df_1m: pd.DataFrame, timeframe: str) -> pd.DataFrame:
     ends_inside = out["open_time"] + period - pd.Timedelta(minutes=1) <= last_minute
     result: pd.DataFrame = out[starts_inside & ends_inside].reset_index(drop=True)[columns]
     return result
+
+
+def with_funding_rate(
+    bars: pd.DataFrame, funding: pd.DataFrame | None, timeframe: str
+) -> pd.DataFrame:
+    """Копия свечей с колонкой funding_rate: последняя выплаченная ставка funding,
+    известная на закрытии свечи (время выплаты <= закрытия). Нет данных — NaN."""
+    out = bars.copy()
+    if funding is None or funding.empty or bars.empty:
+        out["funding_rate"] = float("nan")
+        return out
+    period = pd.Timedelta(minutes=timeframe_minutes(timeframe))
+    closes = pd.DataFrame({"close_time": (out["open_time"] + period).astype("datetime64[ns, UTC]")})
+    rates = funding[["time", "funding_rate"]].sort_values("time")
+    rates = rates.assign(time=rates["time"].astype("datetime64[ns, UTC]"))
+    merged = pd.merge_asof(closes, rates, left_on="close_time", right_on="time")
+    out["funding_rate"] = merged["funding_rate"].to_numpy()
+    return out

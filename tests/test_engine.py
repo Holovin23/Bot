@@ -196,3 +196,57 @@ def test_equity_curve_marks_open_position() -> None:
     row = result.equity[result.equity["time"] == T0 + pd.Timedelta(minutes=10)].iloc[0]
     assert row["in_position"]
     assert row["equity"] == pytest.approx(10_000 - ENTRY_FEE + 41.37630)
+
+
+# --- лимитный вход ---------------------------------------------------------------------
+# Комиссия maker по умолчанию 0.02%. Лимит LONG 99.5, стоп 98: проскальзывания на входе
+# нет, оценка проскальзывания стопа 98 × 0.002 = 0.196.
+# Дистанция 99.5 − 98 + 0.196 = 1.696; объём 50 / 1.696 = 29.4811 -> 29.481.
+LIMIT_QTY = 29.481
+LIMIT_LONG = {"side": Side.LONG, "stop_loss": 98.0, "take_profit": 104.0, "limit_price": 99.5}
+
+
+def test_limit_entry_fills_when_price_goes_through() -> None:
+    # Свеча входа 00:05–00:10. В 00:07 low 99.4 < 99.5 — лимит исполнен по 99.5.
+    # В той же минуте high 104.5 выше тейка, но порядок цен внутри минуты неизвестен —
+    # тейк не засчитан; дальше цена 100, позиция закрывается в конце данных.
+    candles = minutes(20, {7: (100.0, 104.5, 99.4, 99.6)})
+    (trade,) = run(Scripted(LIMIT_LONG), candles).trades
+    assert trade.entry_time == T0 + pd.Timedelta(minutes=7)
+    assert trade.entry_price == trade.entry_price_raw == 99.5
+    assert trade.qty == pytest.approx(LIMIT_QTY)
+    # 29.481 × 99.5 = 2 933.3595; × 0.0002 = 0.58667
+    assert trade.entry_fee == pytest.approx(0.58667, abs=1e-5)
+    assert trade.exit_reason == "end_of_data"
+
+
+def test_limit_entry_cancelled_when_only_touched() -> None:
+    # low ровно 99.5 — касание без прохода: в очереди стакана ордер мог не исполниться
+    candles = minutes(20, {7: (100.0, 100.0, 99.5, 99.6)})
+    result = run(Scripted(LIMIT_LONG), candles)
+    assert result.trades == []
+    assert result.skipped[0].reason == "лимитный ордер не исполнился за свечу"
+
+
+def test_limit_entry_opened_below_limit_is_taker_but_not_worse() -> None:
+    # Лимит 100.5, свеча открылась по 100: исполнение сразу как рыночное —
+    # 100 × 1.001 = 100.1 (не хуже 100.5), комиссия taker.
+    spec = {**LIMIT_LONG, "limit_price": 100.5}
+    (trade,) = run(Scripted(spec), minutes(20)).trades
+    assert trade.entry_time == T0 + pd.Timedelta(minutes=5)
+    assert trade.entry_price == pytest.approx(ENTRY)
+    assert trade.qty == pytest.approx(QTY)
+    assert trade.entry_fee == pytest.approx(ENTRY_FEE)
+
+
+def test_limit_at_open_price_waits_in_queue() -> None:
+    # Лимит 100 = цене открытия: ордер не пересекает стакан, ждёт прохода ниже 100.
+    spec = {**LIMIT_LONG, "limit_price": 100.0}
+    assert run(Scripted(spec), minutes(20)).trades == []
+    # В 00:08 low 99.9 — исполнение по 100 с комиссией maker.
+    # Дистанция 100 − 98 + 0.196 = 2.196; объём 50 / 2.196 = 22.7686 -> 22.768
+    (trade,) = run(Scripted(spec), minutes(20, {8: (100.0, 100.0, 99.9, 100.0)})).trades
+    assert trade.entry_time == T0 + pd.Timedelta(minutes=8)
+    assert trade.entry_price == 100.0
+    assert trade.qty == pytest.approx(22.768)
+    assert trade.entry_fee == pytest.approx(22.768 * 100 * 0.0002)

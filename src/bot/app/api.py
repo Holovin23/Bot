@@ -50,7 +50,7 @@ from bot.strategies.registry import STRATEGIES, create_strategy
 __all__ = ["chart_bars", "create_app", "main"]
 
 STATIC_DIR = Path(__file__).parent / "static"
-TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h"]
+TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
 # Файлы бэктеста, которые можно скачать из интерфейса (для разбора и для ИИ)
 BACKTEST_FILES = {
     "report.md",
@@ -585,7 +585,8 @@ def main() -> None:
             try:
                 make_downloader(say).ensure_history(request["symbol"], start, end)
             except Exception as exc:  # без интернета — бэктест на том, что уже скачано
-                say(f"не удалось загрузить с Bybit ({type(exc).__name__}), считаю на том, что есть")
+                say(f"не удалось загрузить с Bybit: {exc}")
+                say("считаю на том, что уже скачано")
         if touches_holdout(start, end):
             params = ", ".join(f"{k}={v}" for k, v in request["params"].items()) or "—"
             open_holdout(

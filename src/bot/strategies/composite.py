@@ -3,7 +3,6 @@
 mode=regime — каждая стратегия торгует только в «своём» режиме:
     mean_reversion  — RANGE;
     trend_following — TREND_UP, TREND_DOWN;
-    breakout        — RANGE (сжатие бывает в боковике).
 mode=all — те же стратегии без учёта режима (база для сравнения).
 Если на одной свече сигналят несколько стратегий, берётся первая по порядку в members.
 Параметры входящих стратегий — по умолчанию.
@@ -19,23 +18,20 @@ import pandas as pd
 from bot.core.models import Position, Signal
 from bot.features.regime import Regime, regime_frame
 from bot.strategies.base import BaseStrategy, ChartSeries, MarketContext
-from bot.strategies.breakout import Breakout
 from bot.strategies.mean_reversion import MeanReversion
 from bot.strategies.trend_following import TrendFollowing
 
 MEMBERS: dict[str, type[BaseStrategy]] = {
     MeanReversion.name: MeanReversion,
     TrendFollowing.name: TrendFollowing,
-    Breakout.name: Breakout,
 }
 ALLOWED: dict[str, set[int]] = {
     MeanReversion.name: {Regime.RANGE},
     TrendFollowing.name: {Regime.TREND_UP, Regime.TREND_DOWN},
-    Breakout.name: {Regime.RANGE},
 }
 DEFAULT_PARAMS: dict[str, Any] = {
     "mode": "regime",
-    "members": "mean_reversion,trend_following,breakout",
+    "members": "mean_reversion,trend_following",
 }
 
 
