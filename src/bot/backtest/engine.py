@@ -53,6 +53,11 @@ class BacktestTrade:
     funding_events: int = 0
     bars_held: int = 0
     gap_exit: bool = False
+    # Для журнала: почему стратегия вошла и как двигался стоп
+    reason: str = ""
+    features: dict[str, object] = field(default_factory=dict)
+    signal_price: float = 0.0  # close сигнальной свечи (оценка цены входа)
+    stop_moves: list[tuple[pd.Timestamp, float]] = field(default_factory=list)
 
     @property
     def direction(self) -> float:
@@ -86,6 +91,7 @@ class BacktestTrade:
 class SkippedSignal:
     signal_id: str
     reason: str
+    signal: Signal | None = None  # сам сигнал — для журнала (причина, стоп, тейк)
 
 
 @dataclass
@@ -191,7 +197,9 @@ def run_backtest(
             if not liquidation_ok(signal.entry_price, signal.stop_loss, risk.max_leverage, limits):
                 reasons.append("4: стоп слишком близко к цене ликвидации")
             if reasons:
-                skipped.append(SkippedSignal(signal.signal_id, "риск: " + "; ".join(reasons)))
+                skipped.append(
+                    SkippedSignal(signal.signal_id, "риск: " + "; ".join(reasons), signal)
+                )
                 return
         raw = float(market.open[k])
         fill = entry_fill(raw, signal.side, costs.slippage_rate(symbol))
@@ -200,7 +208,9 @@ def run_backtest(
         tp = signal.take_profit
         beyond_take = tp is not None and (fill >= tp if long else fill <= tp)
         if beyond_stop or beyond_take:
-            skipped.append(SkippedSignal(signal.signal_id, "цена входа уже за стопом или тейком"))
+            skipped.append(
+                SkippedSignal(signal.signal_id, "цена входа уже за стопом или тейком", signal)
+            )
             return
         size = position_size(
             equity=cash,
@@ -213,7 +223,7 @@ def run_backtest(
             max_leverage=risk.max_leverage,
         )
         if size.qty <= 0:
-            skipped.append(SkippedSignal(signal.signal_id, size.reason))
+            skipped.append(SkippedSignal(signal.signal_id, size.reason, signal))
             return
         entry_time = market.time(k)
         fee = costs.fee(size.qty * fill)
@@ -233,6 +243,9 @@ def run_backtest(
             risk_amount=size.risk_amount,
             entry_fee=fee,
             time_stop_bars=signal.time_stop_bars,
+            reason=signal.reason,
+            features=dict(signal.features),
+            signal_price=signal.entry_price,
         )
         # Выплата ровно в момент входа позицию не затрагивает.
         while f_ptr < len(market.f_times) and market.f_times[f_ptr] <= market.times[k]:
@@ -256,7 +269,9 @@ def run_backtest(
             elif pending_entry is not None:
                 try_enter(pending_entry, k_start, pending_atr)
         elif pending_entry is not None:
-            skipped.append(SkippedSignal(pending_entry.signal_id, "нет 1m-свечей для входа"))
+            skipped.append(
+                SkippedSignal(pending_entry.signal_id, "нет 1m-свечей для входа", pending_entry)
+            )
         pending_entry = None
         pending_exit = None
 
@@ -294,7 +309,9 @@ def run_backtest(
                 pending_entry = signals[0]
                 pending_atr = float(atr_values[i]) if atr_values is not None else float("nan")
                 for extra in signals[1:]:
-                    skipped.append(SkippedSignal(extra.signal_id, "второй сигнал на той же свече"))
+                    skipped.append(
+                        SkippedSignal(extra.signal_id, "второй сигнал на той же свече", extra)
+                    )
 
         unrealized = 0.0
         if position is not None:
@@ -339,3 +356,5 @@ def _trail(strategy: Strategy, ctx: MarketContext, trade: BacktestTrade) -> None
     tighter = new_stop > trade.stop if trade.side is Side.LONG else new_stop < trade.stop
     if tighter:
         trade.stop = float(new_stop)
+        moved_at = pd.Timestamp(ctx.time) + timeframe_delta(ctx.timeframe)  # закрытие свечи
+        trade.stop_moves.append((moved_at, trade.stop))

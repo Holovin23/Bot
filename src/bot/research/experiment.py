@@ -26,6 +26,7 @@ from bot.backtest.lookahead import find_lookahead
 from bot.backtest.metrics import Metrics, compute_metrics
 from bot.backtest.report import ReportContext, _f, _parse_params, save_report
 from bot.core.config import PROJECT_ROOT, Config, load_config
+from bot.core.journal import Journal
 from bot.data.resample import resample_candles
 from bot.data.storage import Storage
 from bot.research.baseline import BaselineComparison, compare_with_random
@@ -305,7 +306,9 @@ def _run_one(
 
     costs = CostModel.from_config(cfg.costs)
     ctx = ReportContext(start=start, end=end, costs=costs, risk=cfg.risk)
-    folder = save_report(exp.result, exp.metrics, ctx, cfg.resolve(cfg.data.dir) / "backtests")
+    backtests = cfg.resolve(cfg.data.dir) / "backtests"
+    log = Journal(cfg.resolve(cfg.logging.dir) / "journal" / "backtests.jsonl", source="experiment")
+    folder = save_report(exp.result, exp.metrics, ctx, backtests, log)
     report = folder / "report.md"
     with report.open("a", encoding="utf-8") as fh:
         fh.write(render_baselines(exp))

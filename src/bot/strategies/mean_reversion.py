@@ -14,7 +14,7 @@ import pandas as pd
 
 from bot.core.models import Side, Signal
 from bot.features.indicators import adx, atr, bollinger, rsi
-from bot.strategies.base import BaseStrategy, MarketContext
+from bot.strategies.base import BaseStrategy, ChartSeries, MarketContext
 
 DEFAULT_PARAMS: dict[str, Any] = {
     "bb_length": 20,
@@ -43,6 +43,29 @@ class MeanReversion(BaseStrategy):
         p = self.params
         # ADX сглаживается дважды: нужно ~2 × длина свечей
         return int(max(p["bb_length"], p["rsi_length"] + 1, 2 * p["adx_length"], p["atr_length"]))
+
+    def chart_series(self) -> list[ChartSeries]:
+        p = self.params
+        bb = f"BB({p['bb_length']}, {p['bb_std']})"
+        return [
+            ChartSeries("bb_upper", f"{bb} верх", color="#8b949e"),
+            ChartSeries("bb_middle", f"{bb} середина (тейк)", color="#1a7f37", dashed=True),
+            ChartSeries("bb_lower", f"{bb} низ", color="#8b949e"),
+            ChartSeries(
+                "rsi",
+                f"RSI({p['rsi_length']})",
+                "RSI",
+                "#bd10e0",
+                levels=(float(p["rsi_low"]), float(p["rsi_high"])),
+            ),
+            ChartSeries(
+                "adx",
+                f"ADX({p['adx_length']}) < {p['adx_max']} — боковик",
+                "ADX",
+                "#f5a623",
+                levels=(float(p["adx_max"]),),
+            ),
+        ]
 
     def prepare(self, bars: pd.DataFrame) -> pd.DataFrame:
         p = self.params

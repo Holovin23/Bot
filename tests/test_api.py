@@ -151,13 +151,23 @@ def test_equity_and_report(tmp_path: Path) -> None:
     assert client.get("/api/backtests/20261012-000000_x_BTCUSDT_1h/equity").status_code == 404
 
 
-def test_strategies_and_run_job(tmp_path: Path) -> None:
+def wait_job(client: TestClient, job_id: str) -> dict:  # type: ignore[type-arg]
     import time
 
+    for _ in range(100):
+        job = client.get(f"/api/jobs/{job_id}", params={"log": 50}).json()
+        if job["status"] != "running":
+            return job  # type: ignore[no-any-return]
+        time.sleep(0.02)
+    raise AssertionError("задача не закончилась")
+
+
+def test_strategies_and_run_job(tmp_path: Path) -> None:
     calls = []
 
-    def fake_run(strategy, symbol, timeframe, start, end, params):  # type: ignore[no-untyped-def]
-        calls.append((strategy, symbol, timeframe, start, end, params))
+    def fake_run(request, say):  # type: ignore[no-untyped-def]
+        say("считаю")
+        calls.append(request)
         return "20261012-120000_breakout_BTCUSDT_1h"
 
     storage = Storage(tmp_path)
@@ -167,48 +177,72 @@ def test_strategies_and_run_job(tmp_path: Path) -> None:
     assert "mean_reversion" in names
     mr = next(s for s in catalog if s["name"] == "mean_reversion")
     assert mr["params"]["adx_max"] == 20.0
+    assert any("RSI" in label for label in mr["indicators"])
+    assert "Mean Reversion" in mr["description"]
 
     body = {"strategy": "breakout", "symbol": "BTCUSDT", "params": {"take_r": 3}}
     job_id = client.post("/api/backtests/run", json=body).json()["job_id"]
-    for _ in range(50):
-        job = client.get(f"/api/jobs/{job_id}").json()
-        if job["status"] != "running":
-            break
-        time.sleep(0.02)
-    assert job == {
-        "status": "done",
-        "backtest_id": "20261012-120000_breakout_BTCUSDT_1h",
-        "error": None,
-    }
-    assert calls == [("breakout", "BTCUSDT", "1h", "2021-01-01", "2024-06-30", {"take_r": 3})]
+    job = wait_job(client, job_id)
+    assert job["status"] == "done"
+    assert job["backtest_id"] == "20261012-120000_breakout_BTCUSDT_1h"
+    assert any("считаю" in line for line in job["log"])
+    assert calls[0]["start"] == "2021-01-01" and calls[0]["end"] == "2024-06-30"
+    assert calls[0]["params"] == {"take_r": 3}
 
-    bad = {"strategy": "breakout", "symbol": "BTCUSDT", "end": "2025-08-01"}
-    assert client.post("/api/backtests/run", json=bad).status_code == 400  # hold-out
     assert (
         client.post("/api/backtests/run", json={"strategy": "x", "symbol": "BTCUSDT"}).status_code
         == 400
     )
 
 
-def test_job_runner_reports_errors() -> None:
-    from bot.app.jobs import JobRunner
+def test_run_job_custom_period_and_holdout(tmp_path: Path) -> None:
+    def fake_run(request, say):  # type: ignore[no-untyped-def]
+        return "20261012-120000_breakout_BTCUSDT_1h"
 
-    def boom(*_args):  # type: ignore[no-untyped-def]
+    client = TestClient(create_app(Storage(tmp_path), ["BTCUSDT"], run=fake_run))
+    base = {"strategy": "breakout", "symbol": "BTCUSDT"}
+    # Свой период вне hold-out — без вопросов
+    period = {"start": "2023-03-01", "end": "2023-05-31"}
+    ok = client.post("/api/backtests/run", json={**base, **period})
+    assert ok.status_code == 200
+    wait_job(client, ok.json()["job_id"])
+    # После конца hold-out (2026-10-01) — тоже можно
+    period = {"start": "2026-10-01", "end": "2026-10-10"}
+    late = client.post("/api/backtests/run", json={**base, **period})
+    assert late.status_code == 200
+    wait_job(client, late.json()["job_id"])
+    # Hold-out — только с явным согласием
+    holdout = {**base, "start": "2025-08-01", "end": "2025-09-01"}
+    refused = client.post("/api/backtests/run", json=holdout)
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["holdout"] is True
+    allowed = client.post("/api/backtests/run", json={**holdout, "allow_holdout": True})
+    assert allowed.status_code == 200
+    wait_job(client, allowed.json()["job_id"])
+    # Ошибки в датах — понятный текст, а не падение
+    for start, end, text in [
+        ("2023-05-01", "2023-04-01", "раньше"),
+        ("", "2023-04-01", "дат"),
+        ("2023-13-45", "2023-04-01", "Неверная дата"),
+    ]:
+        bad = client.post("/api/backtests/run", json={**base, "start": start, "end": end})
+        assert bad.status_code == 400, (start, end)
+        assert text in bad.json()["detail"]
+
+
+def test_job_runner_reports_errors() -> None:
+    from bot.app.jobs import Job, JobRunner
+
+    def boom(job: Job) -> str:
+        job.say("начал")
         raise ValueError("Нет 1m-свечей")
 
-    runner = JobRunner(boom)
-    request = {
-        "strategy": "s",
-        "symbol": "X",
-        "timeframe": "1h",
-        "start": "",
-        "end": "",
-        "params": {},
-    }
-    job = runner.start(request, wait=True)
+    runner = JobRunner()
+    job = runner.start("backtest", "проверка", boom, wait=True)
     assert job.status == "error"
     assert job.error == "Нет 1m-свечей"
-    assert not runner.busy()
+    assert "начал" in job.log[1]
+    assert not runner.busy("backtest")
 
 
 def test_backtest_without_trades(tmp_path: Path) -> None:

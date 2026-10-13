@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from pathlib import Path
@@ -59,6 +60,14 @@ def load_backtest(root: Path, backtest_id: str) -> dict[str, Any] | None:
         table = pd.read_csv(root / backtest_id / "trades.csv")
     except pd.errors.EmptyDataError:  # бэктест без сделок
         table = pd.DataFrame()
+    # Причины входа есть только в trades.jsonl (бэктесты после появления журналов)
+    reasons: dict[str, str] = {}
+    journal = root / backtest_id / "trades.jsonl"
+    if journal.is_file():
+        for line in journal.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                record = json.loads(line)
+                reasons[str(record.get("signal_id"))] = str(record.get("reason") or "")
     trades = []
     for number, row in enumerate(table.to_dict(orient="records"), start=1):
         trades.append(
@@ -76,6 +85,7 @@ def load_backtest(root: Path, backtest_id: str) -> dict[str, Any] | None:
                 "exit_reason": str(row["exit_reason"]),
                 "r_multiple": _number(row["r_multiple"]),
                 "net_pnl": _number(row["net_pnl"]),
+                "reason": reasons.get(str(row["signal_id"]), ""),
             }
         )
     return {**meta, "trades": trades}

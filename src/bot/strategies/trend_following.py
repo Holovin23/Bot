@@ -13,7 +13,7 @@ import pandas as pd
 
 from bot.core.models import Position, Side, Signal
 from bot.features.indicators import atr, ema
-from bot.strategies.base import BaseStrategy, MarketContext
+from bot.strategies.base import BaseStrategy, ChartSeries, MarketContext
 
 DEFAULT_PARAMS: dict[str, Any] = {
     "ema_fast": 20,
@@ -37,6 +37,18 @@ class TrendFollowing(BaseStrategy):
     def required_history(self) -> int:
         p = self.params
         return int(max(p["ema_slow"], p["atr_length"], p["trail_atr_length"])) + 1
+
+    def chart_series(self) -> list[ChartSeries]:
+        p = self.params
+        return [
+            ChartSeries("ema_fast", f"EMA{p['ema_fast']}", color="#f5a623"),
+            ChartSeries("ema_mid", f"EMA{p['ema_mid']}", color="#4a90e2"),
+            ChartSeries("ema_slow", f"EMA{p['ema_slow']}", color="#bd10e0"),
+            ChartSeries("atr", f"ATR({p['atr_length']}) — стоп {p['stop_atr']}×", "ATR"),
+            ChartSeries(
+                "trail_atr", f"ATR({p['trail_atr_length']}) — трейлинг", "ATR", "#8b949e"
+            ),
+        ]
 
     def prepare(self, bars: pd.DataFrame) -> pd.DataFrame:
         p = self.params

@@ -14,7 +14,7 @@ import pandas as pd
 
 from bot.core.models import Side, Signal
 from bot.features.indicators import bollinger_width, percentile_rank, rolling_max, rolling_min
-from bot.strategies.base import BaseStrategy, MarketContext
+from bot.strategies.base import BaseStrategy, ChartSeries, MarketContext
 
 DEFAULT_PARAMS: dict[str, Any] = {
     "bb_length": 20,
@@ -40,6 +40,29 @@ class Breakout(BaseStrategy):
     def required_history(self) -> int:
         p = self.params
         return int(p["bb_length"] + p["squeeze_lookback"] + 1)
+
+    def chart_series(self) -> list[ChartSeries]:
+        p = self.params
+        n = p["channel_length"]
+        return [
+            ChartSeries("channel_high", f"Максимум {n} свечей", color="#1a7f37", dashed=True),
+            ChartSeries("channel_low", f"Минимум {n} свечей", color="#cf222e", dashed=True),
+            ChartSeries(
+                "squeeze_rank",
+                f"Ранг ширины BB за {p['squeeze_lookback']} (сжатие ниже уровня)",
+                "Сжатие",
+                "#4a90e2",
+                levels=(float(p["squeeze_percentile"]),),
+            ),
+            ChartSeries("volume", "Объём", "Объём", "#8b949e", kind="histogram"),
+            ChartSeries(
+                "avg_volume",
+                f"Порог объёма: средний × {p['volume_mult']}",
+                "Объём",
+                "#f5a623",
+                scale=float(p["volume_mult"]),
+            ),
+        ]
 
     def prepare(self, bars: pd.DataFrame) -> pd.DataFrame:
         p = self.params

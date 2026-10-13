@@ -109,14 +109,17 @@ class LiveFeed:
             self.last_message_at = self.now()
             return True
 
-    def run(self, hours: float) -> None:
+    def run(self, hours: float, stop: threading.Event | None = None) -> None:
+        """stop — событие для остановки из другого потока (боты веб-интерфейса)."""
+        stop = stop or threading.Event()
         for symbol in self.symbols:
             self.backfill(symbol)
         ws = self._connect()
         deadline = time.monotonic() + hours * 3600
         try:
-            while time.monotonic() < deadline:
-                time.sleep(CHECK_EVERY_S)
+            while time.monotonic() < deadline and not stop.is_set():
+                if stop.wait(CHECK_EVERY_S):
+                    break
                 if self.check_stale():
                     ws.exit()
                     ws = self._connect()

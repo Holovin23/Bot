@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -45,6 +46,12 @@ def _normalize(df: pd.DataFrame, columns: list[str], key: str) -> pd.DataFrame:
     return out
 
 
+# Внутри одного процесса пишут несколько потоков (живой поток свечей, догрузка для
+# графика, загрузка из интерфейса): запись «прочитать месяц → дописать → заменить»
+# должна идти по очереди, иначе одна из записей потеряется.
+_WRITE_LOCK = threading.RLock()
+
+
 class _MonthlyParquet:
     """Набор месячных Parquet-файлов в одной папке с ключевой колонкой времени."""
 
@@ -75,6 +82,10 @@ class _MonthlyParquet:
         """Дописать строки. Возвращает число новых строк (без учёта заменённых)."""
         if df.empty:
             return 0
+        with _WRITE_LOCK:
+            return self._write(df)
+
+    def _write(self, df: pd.DataFrame) -> int:
         new = _normalize(df, self.columns, self.key)
         self.folder.mkdir(parents=True, exist_ok=True)
         added = 0
@@ -118,6 +129,13 @@ class _MonthlyParquet:
             df = df[df[self.key] < end_ts]
         return df.sort_values(self.key, ignore_index=True)
 
+    def first_time(self) -> pd.Timestamp | None:
+        for path in sorted(self.folder.glob("*.parquet")):
+            df = self._read_file(path)
+            if not df.empty:
+                return pd.Timestamp(df[self.key].min())
+        return None
+
     def last_time(self) -> pd.Timestamp | None:
         files = sorted(self.folder.glob("*.parquet"))
         for path in reversed(files):
@@ -156,6 +174,9 @@ class Storage:
         end: datetime | str | None = None,
     ) -> pd.DataFrame:
         return self._klines(symbol, timeframe).read(start, end)
+
+    def first_candle_time(self, symbol: str, timeframe: str) -> pd.Timestamp | None:
+        return self._klines(symbol, timeframe).first_time()
 
     def last_candle_time(self, symbol: str, timeframe: str) -> pd.Timestamp | None:
         return self._klines(symbol, timeframe).last_time()

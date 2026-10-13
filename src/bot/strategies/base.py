@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -109,6 +110,26 @@ def _numpy_columns(bars: pd.DataFrame, features: pd.DataFrame) -> dict[str, NDAr
     return columns
 
 
+@dataclass(frozen=True)
+class ChartSeries:
+    """Как рисовать признак стратегии на графике веб-интерфейса.
+
+    column — колонка из prepare() (или колонка свечи, например volume);
+    pane — "price" рисуется поверх свечей, любое другое имя — отдельная панель под
+    графиком; levels — горизонтальные уровни в панели (например, RSI 30 и 70);
+    scale — множитель значения (порог объёма = средний объём × 1,5).
+    """
+
+    column: str
+    label: str
+    pane: str = "price"
+    color: str = "#4a90e2"
+    kind: str = "line"  # line | histogram
+    scale: float = 1.0
+    levels: tuple[float, ...] = ()
+    dashed: bool = False
+
+
 class Strategy(Protocol):
     name: str
     version: str
@@ -152,6 +173,10 @@ class BaseStrategy:
 
     def update_stop(self, ctx: MarketContext, position: Position) -> float | None:
         return None
+
+    def chart_series(self) -> list[ChartSeries]:
+        """Индикаторы, с которыми работает стратегия, — для графика."""
+        return []
 
     def signal(
         self,
