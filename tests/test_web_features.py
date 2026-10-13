@@ -59,22 +59,22 @@ def test_strategy_chart_matches_prepare(tmp_path: Path) -> None:
 
     storage = storage_with_walk(tmp_path)
     client = TestClient(create_app(storage, ["BTCUSDT"]))
-    params = {"strategy": "breakout", "symbol": "BTCUSDT", "timeframe": "1h", "limit": 50}
+    params = {"strategy": "trend_following", "symbol": "BTCUSDT", "timeframe": "1h", "limit": 50}
     data = client.get("/api/strategy-chart", params=params).json()
     bars = chart_bars(storage.read_candles("BTCUSDT", "1m"), "1h")
-    features = create_strategy("breakout", "1h").prepare(bars)
-    rank = next(s for s in data["series"] if s["column"] == "squeeze_rank")["values"]
-    expected = features["squeeze_rank"].tail(50).round(8).tolist()
-    assert rank == pytest.approx([None if pd.isna(v) else v for v in expected])
-    volume = next(s for s in data["series"] if s["column"] == "avg_volume")
-    assert volume["values"][-1] == pytest.approx(features["avg_volume"].iloc[-1] * 1.5)
+    features = create_strategy("trend_following", "1h").prepare(bars)
+    fast = next(s for s in data["series"] if s["column"] == "ema_fast")["values"]
+    expected = features["ema_fast"].tail(50).round(8).tolist()
+    assert fast == pytest.approx([None if pd.isna(v) else v for v in expected])
+    atr = next(s for s in data["series"] if s["column"] == "atr")
+    assert atr["values"][-1] == pytest.approx(features["atr"].iloc[-1])
 
 
 def test_composite_chart_series_use_member_prefixes() -> None:
     from bot.strategies.composite import Composite
 
     columns = {s.column for s in Composite("1h").chart_series()}
-    assert {"regime", "mr__rsi", "tf__ema_fast", "b__channel_high", "volume"} <= columns
+    assert {"regime", "mr__rsi", "tf__ema_fast"} <= columns
 
 
 def test_candles_for_date_range(tmp_path: Path) -> None:
@@ -150,22 +150,22 @@ def test_build_argv_validates_values() -> None:
     argv = build_argv(
         backtest,
         {
-            "--strategy": "breakout",
+            "--strategy": "trend_following",
             "--symbol": "BTCUSDT",
             "--timeframe": "1h",
             "--from": "2023-01-01",
             "--to": "2023-06-30",
-            "--param": ["take_r=3", "volume_mult=2"],
+            "--param": ["stop_atr=3", "trail_atr=4"],
         },
         ["BTCUSDT"],
     )
     assert argv == [
-        "--strategy", "breakout", "--symbol", "BTCUSDT", "--timeframe", "1h",
+        "--strategy", "trend_following", "--symbol", "BTCUSDT", "--timeframe", "1h",
         "--from", "2023-01-01", "--to", "2023-06-30",
-        "--param", "take_r=3", "--param", "volume_mult=2",
+        "--param", "stop_atr=3", "--param", "trail_atr=4",
     ]  # fmt: skip
     with pytest.raises(ValueError, match="Не заполнено"):
-        build_argv(backtest, {"--strategy": "breakout"}, ["BTCUSDT"])
+        build_argv(backtest, {"--strategy": "trend_following"}, ["BTCUSDT"])
     with pytest.raises(ValueError, match="недопустимое"):
         build_argv(BY_ID["quality"], {"--symbol": ["DOGEUSDT"]}, ["BTCUSDT"])
     with pytest.raises(ValueError, match="ГГГГ"):
@@ -261,7 +261,7 @@ class NoFeed:
 
 
 def test_history_days_covers_strategy_warmup() -> None:
-    assert history_days("breakout", "1h", {}) == 30
+    assert history_days("mean_reversion", "1h", {}) == 30
     # EMA200 на 4h — 200 свечей × 4 ч × 1,5 = 50 дней
     assert history_days("trend_following", "4h", {}) == 52
 

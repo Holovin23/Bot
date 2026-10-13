@@ -37,7 +37,7 @@ from bot.strategies.registry import STRATEGIES, create_strategy
 
 IN_SAMPLE_START = "2021-01-01"
 IN_SAMPLE_END = "2024-06-30"  # включительно
-ALL_STRATEGIES = ("trend_following", "mean_reversion", "breakout")
+ALL_STRATEGIES = ("trend_following", "mean_reversion")
 ALL_TIMEFRAMES = ("5m", "15m", "1h")
 
 # Критерии in-sample (docs/01-goals.md, docs/04-backtesting-guide.md)
@@ -68,11 +68,6 @@ HYPOTHESES: dict[str, tuple[str, str]] = {
         "выбор стратегии по режиму рынка (MR в боковике, TF в тренде) лучше, чем те же "
         "стратегии без учёта режима",
         "каждая стратегия работает в своих условиях и теряет в чужих",
-    ),
-    "breakout": (
-        "после сжатия (ширина BB в нижних 10% за 100 свечей) пробой максимума 20 свечей "
-        "на объёме > 1,5 × среднего продолжается на 2R в течение 48 свечей",
-        "сжатие волатильности сменяется её расширением, объём подтверждает пробой",
     ),
 }
 
