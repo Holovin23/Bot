@@ -237,3 +237,16 @@ def test_limit_entry_opened_below_limit_is_taker_but_not_worse() -> None:
     assert trade.entry_price == pytest.approx(ENTRY)
     assert trade.qty == pytest.approx(QTY)
     assert trade.entry_fee == pytest.approx(ENTRY_FEE)
+
+
+def test_limit_at_open_price_waits_in_queue() -> None:
+    # Лимит 100 = цене открытия: ордер не пересекает стакан, ждёт прохода ниже 100.
+    spec = {**LIMIT_LONG, "limit_price": 100.0}
+    assert run(Scripted(spec), minutes(20)).trades == []
+    # В 00:08 low 99.9 — исполнение по 100 с комиссией maker.
+    # Дистанция 100 − 98 + 0.196 = 2.196; объём 50 / 2.196 = 22.7686 -> 22.768
+    (trade,) = run(Scripted(spec), minutes(20, {8: (100.0, 100.0, 99.9, 100.0)})).trades
+    assert trade.entry_time == T0 + pd.Timedelta(minutes=8)
+    assert trade.entry_price == 100.0
+    assert trade.qty == pytest.approx(22.768)
+    assert trade.entry_fee == pytest.approx(22.768 * 100 * 0.0002)

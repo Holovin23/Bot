@@ -205,7 +205,9 @@ def run_backtest(
             return k_start, raw, entry_fill(raw, signal.side, rate), False
         limit = signal.entry_price
         long = signal.side is Side.LONG
-        if (raw <= limit) if long else (raw >= limit):
+        # Свеча открылась лучше лимита: ордер пересекает стакан и исполняется сразу
+        # (taker). Открытие ровно по лимиту — ордер встаёт в очередь, как обычный maker.
+        if (raw < limit) if long else (raw > limit):
             fill = entry_fill(raw, signal.side, rate)
             return k_start, raw, (min(fill, limit) if long else max(fill, limit)), False
         for k in range(k_start, k_end):
