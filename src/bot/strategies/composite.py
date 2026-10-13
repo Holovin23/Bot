@@ -11,13 +11,14 @@ mode=all — те же стратегии без учёта режима (баз
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pandas as pd
 
 from bot.core.models import Position, Signal
 from bot.features.regime import Regime, regime_frame
-from bot.strategies.base import BaseStrategy, MarketContext
+from bot.strategies.base import BaseStrategy, ChartSeries, MarketContext
 from bot.strategies.breakout import Breakout
 from bot.strategies.mean_reversion import MeanReversion
 from bot.strategies.trend_following import TrendFollowing
@@ -59,6 +60,23 @@ class Composite(BaseStrategy):
 
     def required_history(self) -> int:
         return max(m.required_history() for m in self.members)
+
+    def chart_series(self) -> list[ChartSeries]:
+        series = [
+            ChartSeries(
+                "regime",
+                "Режим: 0 боковик, 1 тренд вверх, 2 тренд вниз, 3 высокая волатильность",
+                "Режим",
+                "#4a90e2",
+            )
+        ]
+        for m in self.members:
+            prefix = f"{_short(m.name)}__"
+            for s in m.chart_series():
+                column = s.column if s.column == "volume" else prefix + s.column
+                pane = s.pane if s.pane == "price" else f"{_short(m.name)}: {s.pane}"
+                series.append(replace(s, column=column, pane=pane, label=f"{m.name}: {s.label}"))
+        return series
 
     def prepare(self, bars: pd.DataFrame) -> pd.DataFrame:
         parts = [regime_frame(bars)[["regime"]]]

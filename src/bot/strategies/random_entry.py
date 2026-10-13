@@ -15,7 +15,7 @@ import pandas as pd
 
 from bot.core.models import Side, Signal
 from bot.features.indicators import atr
-from bot.strategies.base import BaseStrategy, MarketContext
+from bot.strategies.base import BaseStrategy, ChartSeries, MarketContext
 
 DEFAULT_PARAMS: dict[str, Any] = {
     "probability": 0.05,
@@ -36,6 +36,10 @@ class RandomEntry(BaseStrategy):
 
     def required_history(self) -> int:
         return int(self.params["atr_length"]) + 1
+
+    def chart_series(self) -> list[ChartSeries]:
+        p = self.params
+        return [ChartSeries("atr", f"ATR({p['atr_length']}) — стоп {p['stop_atr']}×", "ATR")]
 
     def prepare(self, bars: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame({"atr": atr(bars, int(self.params["atr_length"]))})
