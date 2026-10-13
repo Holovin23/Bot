@@ -87,3 +87,16 @@ def test_images_and_albums(tmp_path: Path) -> None:
     assert post_images(conn, "chan", 3) == ["telegram/media/chan/3.jpg"]
     assert post_images(conn, "chan", 4) == []
     assert last_post_id(conn, "chan") == 4
+
+
+def test_progress_callback(tmp_path: Path) -> None:
+    from bot.analyzer import telegram_reader
+
+    calls: list[tuple[int, int]] = []
+    source = FakeMediaTelegram([msg(i, f"пост {i}") for i in range(1, 46)])
+    asyncio.run(
+        telegram_reader.fetch_channel(
+            source, "chan", 0, tmp_path, lambda m, i: calls.append((m, i))
+        )
+    )
+    assert calls == [(20, 0), (40, 0)]

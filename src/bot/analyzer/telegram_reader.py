@@ -17,7 +17,7 @@ import argparse
 import asyncio
 import sqlite3
 import time
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +25,8 @@ from typing import Any, Protocol
 
 from bot.core.config import load_config
 from bot.core.db import connect, db_path
+
+PROGRESS_EVERY = 20
 
 
 @dataclass(frozen=True)
@@ -85,15 +87,21 @@ async def fetch_channel(
     channel: str,
     min_id: int = 0,
     data_dir: Path | None = None,
+    progress: Callable[[int, int], None] | None = None,
 ) -> tuple[list[PostRecord], list[MediaRecord]]:
     """Посты и картинки с id > min_id. data_dir=None — картинки не скачиваются.
 
     Постом считается сообщение с текстом или одиночная картинка без текста; картинки
     альбома без подписи — это не отдельные посты, они привязаны к подписи по grouped_id.
+    progress(сообщений, картинок) вызывается каждые PROGRESS_EVERY сообщений.
     """
     posts: list[PostRecord] = []
     media: list[MediaRecord] = []
+    seen = 0
     async for message in source.iter_messages(channel, min_id=min_id, reverse=True):
+        seen += 1
+        if progress is not None and seen % PROGRESS_EVERY == 0:
+            progress(seen, len(media))
         text = (getattr(message, "message", None) or getattr(message, "text", None) or "").strip()
         photo = getattr(message, "photo", None) is not None
         grouped = getattr(message, "grouped_id", None)
@@ -153,7 +161,14 @@ def main(argv: list[str] | None = None) -> None:
         )
         await client.start()  # при первом запуске спросит телефон и код
         try:
-            return await fetch_channel(client, channel, start, data_dir)
+
+            def show(messages: int, images: int) -> None:
+                print(
+                    f"  просмотрено сообщений: {messages}, скачано картинок: {images}", flush=True
+                )
+
+            print(f"Канал {channel}: качаю сообщения после №{start}…", flush=True)
+            return await fetch_channel(client, channel, start, data_dir, show)
         finally:
             await client.disconnect()
 
