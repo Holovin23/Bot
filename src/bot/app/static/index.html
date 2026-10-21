@@ -623,7 +623,8 @@
     if (!v.strategy) {
       box.innerHTML = `<p class="hint">Все бэктесты. Запускать — на вкладке нужной стратегии.</p>${table}`;
     } else {
-      const defFrom = v.btFrom || "2021-01-01", defTo = v.btTo || "2024-06-30";
+      // По умолчанию — с 2026-08-01 по сегодня (UTC), решение владельца 2026-10-21
+      const defFrom = v.btFrom || "2026-08-01", defTo = v.btTo || new Date().toISOString().slice(0, 10);
       box.innerHTML = `
         <div class="row">
           <span>Символ и таймфрейм — как на графике: <b>${esc(v.symbol)} ${esc(v.tf)}</b></span>
