@@ -138,3 +138,12 @@ def test_image_levels_wait_for_approval() -> None:
 
 def test_registered() -> None:
     assert STRATEGIES["telegram_scenario"] is TelegramScenario
+
+
+def test_post_older_than_history_is_skipped() -> None:
+    # Пост в 02:00, а история начинается с 05:00: сработал ли он раньше, не узнать.
+    # Без проверки он «сработал» бы на пересечении в свече 1 обрезанной истории.
+    df = bars([*flat(99, 6), (99, 102, 98, 101), *flat(101, 2)]).iloc[5:]
+    fires, outcome = find_fires(df.reset_index(drop=True), "1h", [version(ABOVE)])
+    assert fires == []
+    assert "раньше загруженной истории" in outcome["s1"]
