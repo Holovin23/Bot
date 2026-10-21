@@ -4,6 +4,7 @@ from typing import Any
 import pandas as pd
 import pytest
 import requests
+from pybit.exceptions import InvalidRequestError
 
 from bot.data.downloader import Downloader, RestCaller, missing_spans, to_ms
 from bot.data.storage import Storage
@@ -107,6 +108,38 @@ def test_retry_on_network_error() -> None:
     caller = RestCaller(min_interval_s=0, max_attempts=5, sleep=pauses.append)
     assert caller.call(flaky) == {"ok": True}
     assert pauses == [2.0, 4.0]  # пауза растёт: 2, 4 секунды
+
+
+def bybit_error(code: int) -> InvalidRequestError:
+    return InvalidRequestError("GET /v5/market/kline", "svc error", code, "17:27:10", {})
+
+
+def test_retry_on_bybit_server_error() -> None:
+    attempts = []
+    pauses: list[float] = []
+
+    def flaky(**_: Any) -> dict[str, Any]:
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise bybit_error(10016)  # как в логе: «Get kline failed (ErrCode: 10016)»
+        return {"ok": True}
+
+    caller = RestCaller(min_interval_s=0, max_attempts=5, sleep=pauses.append)
+    assert caller.call(flaky) == {"ok": True}
+    assert pauses == [2.0, 4.0]
+
+
+def test_no_retry_on_bad_request() -> None:
+    attempts = []
+
+    def bad(**_: Any) -> dict[str, Any]:
+        attempts.append(1)
+        raise bybit_error(10001)  # ошибка в параметрах: повтор не поможет
+
+    caller = RestCaller(min_interval_s=0, max_attempts=5, sleep=lambda _: None)
+    with pytest.raises(InvalidRequestError):
+        caller.call(bad)
+    assert len(attempts) == 1
 
 
 def test_funding_pages_back_through_history(tmp_path: Path) -> None:

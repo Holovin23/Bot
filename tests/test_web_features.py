@@ -319,3 +319,47 @@ def test_two_paper_bots_run_side_by_side(tmp_path: Path) -> None:
     assert [x["id"] for x in client.get("/api/bots").json()["bots"]] == [a]
     assert host._feed_symbols == []  # никого не осталось — поток свечей остановлен
     host.shutdown()
+
+
+def _report_cfg(tmp_path: Path) -> Any:
+    cfg = load_config(env_file=None)
+    return cfg.model_copy(
+        update={
+            "data": cfg.data.model_copy(update={"dir": tmp_path / "data"}),
+            "logging": cfg.logging.model_copy(update={"dir": tmp_path / "logs"}),
+        }
+    )
+
+
+def test_backtest_refuses_incomplete_history(tmp_path: Path) -> None:
+    from bot.backtest.report import run_report
+
+    storage_with_walk(tmp_path, days=10)  # свечи 01.01–10.01, просим до 31.01
+    with pytest.raises(ValueError, match="неполных данных"):
+        run_report(
+            _report_cfg(tmp_path),
+            "random_entry",
+            "BTCUSDT",
+            "1h",
+            pd.Timestamp("2024-01-01", tz="UTC"),
+            pd.Timestamp("2024-01-31", tz="UTC"),
+        )
+
+
+def test_backtest_allows_period_before_listing(tmp_path: Path) -> None:
+    from bot.backtest.report import run_report
+
+    storage_with_walk(tmp_path, days=30)  # свечи с 01.01.2024, период с 01.12.2023
+    lines: list[str] = []
+    _, metrics = run_report(
+        _report_cfg(tmp_path),
+        "random_entry",
+        "BTCUSDT",
+        "1h",
+        pd.Timestamp("2023-12-01", tz="UTC"),
+        pd.Timestamp("2024-01-31", tz="UTC"),
+        {"probability": 0.3},
+        say=lines.append,
+    )
+    assert metrics.trades > 0
+    assert any("начинаются с 2024-01-01" in line for line in lines)
