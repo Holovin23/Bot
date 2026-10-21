@@ -47,3 +47,80 @@ def test_fetch_and_save(tmp_path: Path) -> None:
 def test_record_is_plain_data() -> None:
     p = PostRecord("c", 1, datetime(2026, 1, 1, tzinfo=UTC), "t")
     assert p.channel == "c"
+
+
+class FakeMediaTelegram(FakeTelegram):
+    async def download_media(self, message: Any, file: str) -> str:
+        path = Path(file + ".jpg")
+        path.write_bytes(b"jpg")
+        return str(path)
+
+
+def photo(i: int, text: str | None, grouped: int | None = None) -> SimpleNamespace:
+    m = msg(i, text)
+    m.photo = object()
+    m.grouped_id = grouped
+    return m
+
+
+def test_images_and_albums(tmp_path: Path) -> None:
+    from bot.analyzer.telegram_reader import fetch_channel, post_images, save_media
+
+    conn = connect(tmp_path / "bot.sqlite")
+    source = FakeMediaTelegram(
+        [
+            photo(1, "BTC: график", grouped=77),  # подпись альбома
+            photo(2, None, grouped=77),  # вторая картинка альбома — не отдельный пост
+            photo(3, None),  # одиночная картинка без текста — пост
+            msg(4, "просто текст"),
+        ]
+    )
+    posts, media = asyncio.run(fetch_channel(source, "chan", 0, tmp_path))
+    assert [p.post_id for p in posts] == [1, 3, 4]
+    assert [m.path for m in media] == [f"telegram/media/chan/{i}.jpg" for i in (1, 2, 3)]
+    save_posts(conn, posts)
+    assert save_media(conn, media) == 3
+    assert post_images(conn, "chan", 1) == [
+        "telegram/media/chan/1.jpg",
+        "telegram/media/chan/2.jpg",
+    ]
+    assert post_images(conn, "chan", 3) == ["telegram/media/chan/3.jpg"]
+    assert post_images(conn, "chan", 4) == []
+    assert last_post_id(conn, "chan") == 4
+
+
+def test_progress_callback(tmp_path: Path) -> None:
+    from bot.analyzer import telegram_reader
+
+    calls: list[tuple[int, int]] = []
+    source = FakeMediaTelegram([msg(i, f"пост {i}") for i in range(1, 46)])
+    asyncio.run(
+        telegram_reader.fetch_channel(
+            source, "chan", 0, tmp_path, lambda m, i: calls.append((m, i))
+        )
+    )
+    assert calls == [(20, 0), (40, 0)]
+
+
+def test_since_and_batches(tmp_path: Path) -> None:
+    from bot.analyzer import telegram_reader
+
+    # 45 сообщений, сообщение i опубликовано в 08:i UTC; нужны с 08:05 — это id 5..45 (41 шт.)
+    source = FakeMediaTelegram([msg(i, f"пост {i}") for i in range(1, 46)])
+    conn = connect(tmp_path / "bot.sqlite")
+    sizes: list[int] = []
+
+    def save(posts: list[PostRecord], media: list[Any]) -> None:
+        sizes.append(len(posts))
+        save_posts(conn, posts)
+
+    since = datetime(2026, 10, 1, 8, 5, tzinfo=UTC)
+    posts, _ = asyncio.run(
+        telegram_reader.fetch_channel(source, "chan", 0, tmp_path, since=since, on_batch=save)
+    )
+    assert [p.post_id for p in posts] == list(range(5, 46))
+    assert source.calls[0]["offset_date"] == since
+    # сохраняется по ходу: до 20-го сообщения — 19 постов, до 40-го — ещё 20, в конце — 2
+    assert sizes == [19, 20, 2]
+    assert conn.execute("SELECT COUNT(*) AS n FROM telegram_posts").fetchone()["n"] == 41
+    assert last_post_id(conn, "chan") == 45

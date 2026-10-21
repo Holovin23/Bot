@@ -42,6 +42,51 @@ SCHEMA = [
         PRIMARY KEY (channel, post_id, symbol)
     )
     """,
+    # Сценарии из Telegram (docs/10): картинки постов, ячейки сценариев и их версии
+    """
+    CREATE TABLE IF NOT EXISTS telegram_media (
+        channel TEXT NOT NULL,
+        post_id INTEGER NOT NULL,     -- сообщение с картинкой
+        grouped_id INTEGER,           -- альбом: подпись и картинки в разных сообщениях
+        path TEXT NOT NULL,           -- путь относительно папки data
+        PRIMARY KEY (channel, post_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS scenario_posts (
+        channel TEXT NOT NULL,
+        post_id INTEGER NOT NULL,
+        source TEXT NOT NULL,         -- модель Claude API или claude-code
+        post_kind TEXT NOT NULL,      -- ANALYSIS | RESULTS | OTHER | FAILED
+        result_json TEXT,
+        report_json TEXT,             -- что создано, обновлено, отклонено и почему
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (channel, post_id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS scenarios (
+        scenario_id TEXT PRIMARY KEY,
+        channel TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        side TEXT NOT NULL,
+        status TEXT NOT NULL,         -- ACTIVE | CANCELLED
+        needs_review INTEGER NOT NULL,  -- уровни только с картинки: проверить глазами
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS scenario_versions (
+        scenario_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        valid_from TEXT NOT NULL,     -- время поста (UTC)
+        valid_to TEXT,                -- время поста, который обновил или отменил версию
+        post_id INTEGER NOT NULL,
+        scenario_json TEXT NOT NULL,
+        PRIMARY KEY (scenario_id, version)
+    )
+    """,
     # Этап 7: живой бот (paper / demo)
     """
     CREATE TABLE IF NOT EXISTS live_trades (

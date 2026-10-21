@@ -105,6 +105,15 @@ class LiveRiskConfig(BaseModel):
     max_drawdown: float = Field(default=0.05, gt=0, le=0.10)
 
 
+class ScenariosConfig(BaseModel):
+    """Сценарии из Telegram-канала (docs/10). symbols — белый список монет: сценарии по
+    другим монетам отклоняются. Для торговли монета нужна и в instruments."""
+
+    channel: str = "Prizrak_trade"
+    symbols: list[str] = Field(default_factory=lambda: ["BTCUSDT", "ETHUSDT"])
+    model: str = "claude-opus-5-5"
+
+
 class Secrets(BaseSettings):
     """Значения из .env и переменных окружения. Ключи хранятся как SecretStr:
     при печати видно '**********', а не сам ключ."""
@@ -144,6 +153,7 @@ class Config(BaseModel):
     risk: RiskConfig = Field(default_factory=RiskConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     live_risk: LiveRiskConfig = Field(default_factory=LiveRiskConfig)
+    scenarios: ScenariosConfig = Field(default_factory=ScenariosConfig)
     secrets: Secrets
 
     def for_live(self) -> Config:
