@@ -107,3 +107,52 @@ def cells(data_dir: Path, include_cancelled: bool = False) -> list[dict[str, Any
         }
         for r in rows
     ]
+
+
+def pipeline_status(data_dir: Path, channel: str | None = None) -> dict[str, Any]:
+    """Сводка для страницы «Старт»: сколько постов выгружено и разобрано, сколько ячеек.
+    channel=None — по всем каналам."""
+    status: dict[str, Any] = {
+        "posts": 0,
+        "last_post": None,
+        "unparsed": 0,
+        "failed": 0,
+        "cells_active": 0,
+        "cells_review": 0,
+    }
+    path = db_path(data_dir)
+    if not path.exists():
+        return status
+    where = "(? IS NULL OR channel = ?)"
+    args = (channel, channel)
+    conn = connect(path)
+    try:
+        posts = conn.execute(
+            f"SELECT COUNT(*) AS n, MAX(published_at) AS last FROM telegram_posts WHERE {where}",
+            args,
+        ).fetchone()
+        unparsed = conn.execute(
+            f"SELECT COUNT(*) AS n FROM telegram_posts p WHERE {where} AND NOT EXISTS (SELECT 1 "
+            "FROM scenario_posts s WHERE s.channel = p.channel AND s.post_id = p.post_id)",
+            args,
+        ).fetchone()
+        failed = conn.execute(
+            f"SELECT COUNT(*) AS n FROM scenario_posts WHERE {where} AND post_kind = 'FAILED'",
+            args,
+        ).fetchone()
+        active = conn.execute(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(needs_review), 0) AS review FROM scenarios "
+            f"WHERE {where} AND status = 'ACTIVE'",
+            args,
+        ).fetchone()
+    finally:
+        conn.close()
+    status.update(
+        posts=int(posts["n"]),
+        last_post=_ts(posts["last"]),
+        unparsed=int(unparsed["n"]),
+        failed=int(failed["n"]),
+        cells_active=int(active["n"]),
+        cells_review=int(active["review"]),
+    )
+    return status

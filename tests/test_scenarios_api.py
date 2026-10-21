@@ -121,3 +121,17 @@ def test_post_backtest_job(tmp_path: Path) -> None:
     bad = client.post("/api/scenarios/backtest", json={**body, "timeframe": "2h"})
     assert bad.status_code == 400
     assert setup(tmp_path / "x").post("/api/scenarios/backtest", json=body).status_code == 503
+
+
+def test_pipeline_status(tmp_path: Path) -> None:
+    client = setup(tmp_path)
+    status = client.get("/api/scenarios/status").json()
+    # Два поста (1 и 3), разобран один; две активные ячейки, одна — уровни с картинки
+    assert status["posts"] == 2 and status["unparsed"] == 1 and status["failed"] == 0
+    assert status["cells_active"] == 2 and status["cells_review"] == 1
+    assert status["last_post"] == int(datetime(2026, 10, 1, 8, 0, tzinfo=UTC).timestamp())
+    assert status["symbols"] == ["BTCUSDT", "ETHUSDT"]
+    other = TestClient(create_app(Storage(tmp_path), ["BTCUSDT"], channel="другой"))
+    assert other.get("/api/scenarios/status").json()["posts"] == 0
+    empty = TestClient(create_app(Storage(tmp_path / "empty"), ["BTCUSDT"]))
+    assert empty.get("/api/scenarios/status").json()["cells_active"] == 0

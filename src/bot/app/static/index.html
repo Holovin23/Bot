@@ -114,6 +114,16 @@
     .bias.BULLISH { color: #1a7f37; } .bias.BEARISH { color: #cf222e; }
     .jrow td:last-child { white-space: normal; word-break: break-all;
       font: 12px ui-monospace, monospace; }
+    /* Страница «Старт» */
+    .steps { max-width: 980px; }
+    .step { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin: 10px 0;
+      background: var(--panel); overflow-x: auto; }
+    .step h3 { margin: 0 0 6px; }
+    .step .stepnum { display: inline-block; width: 22px; height: 22px; border-radius: 50%; text-align: center;
+      line-height: 22px; background: var(--accent); color: #fff; font-size: 13px; margin-right: 6px; }
+    .step.done .stepnum { background: #1a7f37; }
+    .step.todo .stepnum { background: #9a6700; }
+    .flow { color: var(--muted); margin: 4px 0 8px; }
     footer { padding: 3px 16px; color: var(--muted); font-size: 12px;
       border-top: 1px solid var(--border); }
     footer a { color: inherit; }
@@ -136,6 +146,7 @@
         <span id="w-status"></span>
       </div>
       <div class="legend" id="legend"></div>
+      <div class="hint" id="cells-note" style="padding: 0 16px; font-size: 12px"></div>
       <div id="tradeinfo"></div>
       <div id="nodata" class="hint"></div>
       <div id="charts"><div id="chart"></div></div>
@@ -150,11 +161,11 @@
       </div>
     </section>
 
+    <section id="page-home" class="page"></section>
     <section id="page-bots" class="page"></section>
     <section id="page-data" class="page"></section>
     <section id="page-journals" class="page"></section>
     <section id="page-commands" class="page"></section>
-    <section id="page-telegram" class="page"></section>
     <section id="page-scenarios" class="page"></section>
   </main>
   <footer>
@@ -240,13 +251,11 @@
   // ===================== данные приложения =====================
   const app = {
     symbols: [], timeframes: [], strategies: [], backtests: [], bots: [],
-    tab: "overview",        // текущая главная вкладка
+    tab: "home",            // текущая главная вкладка
     views: {},              // состояние каждой вкладки графика
   };
-  const STRATEGY_TITLES = {
-    trend_following: "Trend Following", mean_reversion: "Mean Reversion", time_series_momentum: "Daily Momentum",
-    composite: "Composite", random_entry: "Random (база)", telegram_scenario: "Сценарии TG",
-  };
+  const STRATEGY_TITLES = { random_entry: "Random (база)", telegram_scenario: "Сценарии TG" };
+  const TG = "telegram_scenario";  // единственная торговая стратегия
 
   function view(key) {
     if (!app.views[key]) {
@@ -266,17 +275,12 @@
 
   // ===================== главные вкладки =====================
   function renderNav() {
-    const items = [["overview", "Обзор"]];
-    const order = ["trend_following", "time_series_momentum", "mean_reversion", "composite", "random_entry"];
-    const rank = (n) => (order.includes(n) ? order.indexOf(n) : order.length);
-    const names = app.strategies.map((s) => s.name).sort((a, b) => rank(a) - rank(b));
-    for (const name of names) items.push([name, STRATEGY_TITLES[name] || name]);
-    const rest = [["bots", "Боты"], ["data", "Данные"], ["journals", "Журналы"],
-                  ["commands", "Команды"], ["telegram", "Telegram"], ["scenarios", "Сценарии"]];
-    const runningBy = {};
-    for (const b of app.bots) if (b.state === "running") runningBy[b.strategy] = true;
+    // Порядок вкладок — порядок работы: посты → ячейки → график/бэктест → боты
+    const items = [["home", "Старт"], ["scenarios", "Сценарии"], [TG, "График и бэктест"], ["bots", "Боты"]];
+    const rest = [["data", "Данные"], ["journals", "Журналы"], ["commands", "Команды"]];
+    const running = app.bots.some((b) => b.state === "running");
     const btn = ([key, title]) => `<button data-tab="${key}" class="${app.tab === key ? "active" : ""}">` +
-      `${esc(title)}${runningBy[key] ? '<span class="running-dot" title="работает paper-бот"></span>' : ""}</button>`;
+      `${esc(title)}${key === "bots" && running ? '<span class="running-dot" title="работает paper-бот"></span>' : ""}</button>`;
     $("nav").innerHTML = `<span class="brand">Bot</span>` + items.map(btn).join("") +
       `<span class="sep"></span>` + rest.map(btn).join("");
     $("nav").querySelectorAll("button").forEach((b) => b.onclick = () => openTab(b.dataset.tab));
@@ -293,8 +297,8 @@
       showView(view(key));
     } else {
       $("page-" + key).classList.add("active");
-      ({ bots: renderBotsPage, data: renderDataPage, journals: renderJournalsPage,
-         commands: renderCommandsPage, telegram: renderTelegram, scenarios: renderScenarios })[key]();
+      ({ home: renderHome, bots: renderBotsPage, data: renderDataPage, journals: renderJournalsPage,
+         commands: renderCommandsPage, scenarios: renderScenarios })[key]();
     }
   }
 
@@ -412,6 +416,7 @@
       : OVERVIEW_SERIES.map((s) => ({ ...s, values: rows.map((r) => r[s.column]) }));
     drawIndicators(rows, series);
     drawTrades(v, rows);
+    if (v.strategy === TG) drawCells(v);
     if (keep) chart.timeScale().setVisibleLogicalRange(keep);
     else if (!opts.until) chart.timeScale().fitContent();
     $("w-status").textContent = statusText(v, data, rows, opts.until);
@@ -497,6 +502,33 @@
     add(t.initial_stop, "#cf222e", "стоп");
     if (t.stop !== t.initial_stop) add(t.stop, "#fb8f44", "стоп (трейлинг)");
     add(t.take, "#1a7f37", "тейк");
+  }
+
+  // Активные ячейки монеты — горизонтальные линии: уровень входа (или зона) и стоп автора
+  let cellLines = [];
+  async function drawCells(v) {
+    let cells = [];
+    try { cells = (await api("/api/scenarios?limit=1")).cells; } catch (e) { cells = []; }
+    cellLines.forEach((l) => candles.removePriceLine(l));
+    cellLines = [];
+    if (app.views[app.tab] !== v) return;
+    const mine = cells.filter((c) => c.status === "ACTIVE" && c.symbol === v.symbol);
+    for (const c of mine) {
+      const s = c.scenario, t = s.trigger;
+      const color = s.side === "LONG" ? "#1a7f37" : "#cf222e";
+      const tag = `${s.side} ${c.needs_review ? "(не одобрена) " : ""}`;
+      const line = (price, title, style, lineColor = color) => {
+        if (price === null || price === undefined) return;
+        cellLines.push(candles.createPriceLine({ price, color: lineColor, title, lineWidth: 1,
+                                                 lineStyle: style, axisLabelVisible: true }));
+      };
+      if (t.type === "touch_zone") { line(t.zone_low, tag + "зона", 0); line(t.zone_high, tag + "зона", 0); }
+      else line(t.level, tag + triggerText(t), 0);
+      line(s.stop, "стоп автора", 3, "#8b949e");
+    }
+    const note = mine.length ? `Активных ячеек ${v.symbol}: ${mine.length}. Линии: уровень входа — сплошная, стоп автора — пунктир.` : "";
+    const el = $("cells-note");
+    if (el) el.textContent = note;
   }
 
   async function showTrade(v, number) {
@@ -778,7 +810,7 @@
   async function showBotTrades(id) {
     const detail = await api(`/api/bots/${encodeURIComponent(id)}`);
     let key = detail.strategy;
-    if (!app.strategies.some((s) => s.name === key)) key = "overview";
+    if (!app.strategies.some((s) => s.name === key)) key = TG;  // бот старой, уже удалённой стратегии
     const v = view(key);
     v.source = { type: "bot", id, symbol: detail.symbol, title: id, trades: botTrades(detail) };
     v.symbol = detail.symbol; v.tf = detail.timeframe; v.params = { ...detail.params };
@@ -824,7 +856,7 @@
         <button id="all-resume">Возобновить бота из терминала</button><span id="all-msg" class="hint"></span></div>
       <p class="hint">Аварийная остановка закрывает позиции всех paper-ботов интерфейса и бота,
         запущенного командой <code>bot.runner.live</code> (через файл data/KILL).
-        Создать бота — на вкладке стратегии, «Paper-боты».</p>
+        Создать бота — на «Старте» (шаг 4) или «График и бэктест» → «Paper-боты».</p>
       <div id="bp-table">${botTable(app.bots, true)}</div>
       <div id="bp-detail"></div>
       <h3>Бот из терминала (config/live.yaml)</h3>
@@ -1073,22 +1105,116 @@
     });
   }
 
-  // ===================== Telegram =====================
-  async function renderTelegram() {
-    const box = $("page-telegram");
-    box.innerHTML = `<p class="hint">Загрузка…</p>`;
-    const posts = (await api("/api/telegram")).posts;
-    if (!posts.length) {
-      box.innerHTML = `<p class="hint">Постов нет. Выгрузите канал: вкладка «Команды» → «Скачать посты канала».</p>`;
-      return;
-    }
-    box.innerHTML = `<p class="hint">Мнения канала и их разбор ИИ — только справочно, на сделки не влияют.</p>` +
-      posts.map((p) => {
-        const views = p.views.map((v) => `<span class="bias ${esc(v.bias)}">${esc(v.symbol)} ${esc(v.bias)} (${esc(v.horizon)})</span>`).join("");
-        const summary = p.summary === null ? `<span class="hint">не разобран</span>` : `${views}${esc(p.summary)}`;
-        return `<div class="post"><div class="meta">${when(p.time)} · ${esc(p.channel)} #${p.post_id}</div>` +
-          `<div class="text">${esc(p.text)}</div><div>ИИ: ${summary}</div></div>`;
-      }).join("");
+  // ===================== Старт =====================
+  // Весь путь от поста до сделки на одной странице: что уже сделано и что нажать дальше.
+  const HOME_JOBS = { telegram: "Скачать посты канала", scenarios_parse: "Сценарии: разбор через Claude API" };
+
+  async function runHomeCommand(id, values, logId, after) {
+    const el = $(logId);
+    try {
+      const { job_id } = await api(`/api/commands/${id}`, { method: "POST", body: { values } });
+      const job = await watchJob(job_id, (j) => { const box = $(logId); if (box) { box.textContent = jobText(j); box.scrollTop = box.scrollHeight; } });
+      if (app.tab === "home" && job.status !== "running") after();
+    } catch (e) { if (el) el.textContent = "ошибка: " + e.message; }
+  }
+
+  async function renderHome() {
+    const box = $("page-home");
+    let st, jobs, demo;
+    try {
+      [st, jobs, demo] = await Promise.all([api("/api/scenarios/status"), api("/api/jobs"),
+        api("/api/bot?mode=demo"), refreshBots()]);
+    } catch (e) { box.innerHTML = `<p class="loss">${esc(e.message)}</p>`; return; }
+    const running = (title) => jobs.jobs.find((j) => j.status === "running" && j.title === title);
+    const watching = running(HOME_JOBS.telegram);
+    const parsing = running(HOME_JOBS.scenarios_parse);
+    const tgBots = app.bots.filter((b) => b.strategy === TG);
+    const missing = st.symbols.filter((s) => !tgBots.some((b) => b.symbol === s));
+    const cls = (ok) => ok ? "step done" : "step todo";
+    const channel = st.channel ? `@${esc(st.channel)}` : "канала";
+    const r = demo.risk;
+
+    box.innerHTML = `<div class="steps">
+      <h2>Как работает бот</h2>
+      <div class="flow">Пост в канале ${channel} → разбор в ячейки (сценарии автора) → на закрытии каждой свечи
+        бот проверяет условие ячейки → риск-менеджер считает объём → рыночный вход со стопом и тейком на бирже.
+        Заранее лимитных ордеров нет: условие проверяет этот компьютер. Подробно — <code>docs/HOW_IT_WORKS.md</code>.</div>
+
+      <div class="${cls(st.posts > 0)}"><h3><span class="stepnum">1</span>Посты канала</h3>
+        <div>${st.posts ? `Скачано постов: <b>${st.posts}</b>, последний — ${when(st.last_post)}.` : "Постов ещё нет."}
+          ${watching ? `<span class="badge running">канал проверяется каждые 10 минут</span>` : ""}</div>
+        <div class="row"><button id="h-dl" class="primary">Скачать новые посты</button>
+          ${watching ? `<button id="h-unwatch">Перестать следить</button>`
+            : `<button id="h-watch" title="Скачивать новые посты каждые 10 минут, пока открыт интерфейс">Следить за каналом</button>`}</div>
+        <div class="hint">Первый вход в Telegram спрашивает код из приложения — один раз выполните в терминале
+          <code>uv run python -m bot.analyzer.telegram_reader</code>. Дальше кнопки работают сами.</div>
+        <div class="log" id="h-dl-log"></div></div>
+
+      <div class="${cls(st.posts > 0 && st.unparsed === 0)}"><h3><span class="stepnum">2</span>Разбор постов в ячейки</h3>
+        <div>${st.unparsed ? `Не разобрано: <b>${st.unparsed}</b>.` : st.posts ? "Все посты разобраны." : "Сначала скачайте посты."}
+          ${st.failed ? `<span class="warn">Не удалось разобрать: ${st.failed}.</span>` : ""}</div>
+        <div class="row"><button id="h-parse" class="primary"${st.unparsed && !parsing ? "" : " disabled"}>Разобрать через Claude API</button>
+          <label>постов за раз <input id="h-parse-n" type="number" value="20" min="1" max="500" style="width:5em"></label>
+          ${parsing ? `<span class="badge running">идёт разбор</span>` : ""}</div>
+        <div class="hint">Платно, нужен <code>ANTHROPIC_API_KEY</code> в <code>.env</code>. Бесплатный вариант — в Claude Code
+          попросите «разбери новые посты» (скилл <code>telegram-scenarios</code>). Посты разбираются по порядку:
+          новый пост может обновить или отменить ячейку прошлого.</div>
+        <div class="log" id="h-parse-log"></div></div>
+
+      <div class="${cls(st.cells_active > 0 && st.cells_review === 0)}"><h3><span class="stepnum">3</span>Ячейки</h3>
+        <div>Активных: <b>${st.cells_active}</b>${st.cells_review ? `, из них <span class="warn">ждут проверки уровней с картинки: ${st.cells_review}</span>` : ""}.</div>
+        <div class="row"><button id="h-cells">Открыть «Сценарии»</button>
+          <button id="h-chart">Ячейки на графике</button></div>
+        <div class="hint">Новая ячейка начинает работать через 5 минут после поста и срабатывает один раз.
+          До входа она «умирает», если цена дошла до стопа автора или до его первой цели.</div></div>
+
+      <div class="${cls(tgBots.some((b) => b.state === "running"))}"><h3><span class="stepnum">4</span>Paper-бот (виртуальный счёт)</h3>
+        <div id="h-bots-table">${tgBots.length ? botTable(tgBots, false) : `<p>Paper-ботов ещё нет.</p>`}</div>
+        ${missing.length ? `<div class="row"><button id="h-bots" class="primary">Запустить paper-ботов: ${esc(missing.join(", "))}</button>
+          <label>Капитал каждого, USDT <input id="h-capital" type="number" value="10000" min="100" step="100" style="width:8em"></label>
+          <span>таймфрейм 1h</span><span id="h-bots-msg" class="hint"></span></div>` : ""}
+        <div class="hint">Сделки виртуальные, по живым ценам Bybit, тем же кодом, что бэктест и демо. Боты работают,
+          пока открыт этот интерфейс (окно терминала с ним), и сами стартуют при следующем запуске.</div></div>
+
+      <div class="${cls(Boolean(r))}"><h3><span class="stepnum">5</span>Демо-счёт Bybit</h3>
+        <div>${r ? `Капитал на демо-счёте: <b>${num(r.equity)}</b> USDT, открыто сделок: ${demo.trades.length}.`
+          : "Демо-бот ещё не запускался."}${demo.kill ? ` <span class="loss">ОСТАНОВЛЕН: ${esc(demo.kill)}</span>` : ""}</div>
+        <div class="hint">Запуск — в отдельном терминале: <code>uv run python -m bot.runner.live --mode demo</code>
+          (монеты и таймфрейм — <code>config/live.yaml</code>, ключи демо-счёта — <code>.env</code>). Ордера уходят на демо-счёт
+          и видны на сайте Bybit в Demo Trading. Стоп и тейк стоят на бирже, поэтому открытая сделка защищена,
+          даже если компьютер выключен; новые входы без компьютера не происходят. Следить — вкладка «Боты», режим demo.</div></div>
+    </div>`;
+
+    $("h-dl").onclick = () => { $("h-dl").disabled = true; runHomeCommand("telegram", {}, "h-dl-log", renderHome); };
+    if ($("h-watch")) $("h-watch").onclick = async () => {
+      try { await api("/api/commands/telegram", { method: "POST", body: { values: { "--every": 10 } } }); }
+      catch (e) { $("h-dl-log").textContent = "ошибка: " + e.message; return; }
+      renderHome();
+    };
+    if ($("h-unwatch")) $("h-unwatch").onclick = async () => {
+      try { await api(`/api/jobs/${watching.job_id}/stop`, { method: "POST" }); } catch (e) { alert(e.message); }
+      setTimeout(renderHome, 1000);
+    };
+    $("h-parse").onclick = () => {
+      if (!confirm("Разбор через Claude API платный. Разобрать?")) return;
+      $("h-parse").disabled = true;
+      runHomeCommand("scenarios_parse", { "--limit": Number($("h-parse-n").value) }, "h-parse-log", renderHome);
+    };
+    $("h-cells").onclick = () => openTab("scenarios");
+    $("h-chart").onclick = () => openTab(TG);
+    if ($("h-bots")) $("h-bots").onclick = async () => {
+      $("h-bots").disabled = true;
+      const errors = [];
+      for (const symbol of missing) {
+        try {
+          await api("/api/bots", { method: "POST", body: { strategy: TG, symbol, timeframe: "1h",
+            params: {}, capital: Number($("h-capital").value) } });
+        } catch (e) { errors.push(`${symbol}: ${e.message}`); }
+      }
+      renderHome();
+      if (errors.length) alert(errors.join("\n"));
+    };
+    bindBotButtons(box, renderHome);
   }
 
   // ===================== Сценарии (docs/10) =====================
@@ -1139,9 +1265,10 @@
     if (!box.dataset.ready) {
       box.dataset.ready = "1";
       box.innerHTML = `
-        <p class="hint">Сценарии автора канала → ячейки → сделки по правилам бота. Разбор постов: скилл
-          <code>telegram-scenarios</code> в Claude Code (план Б, без оплаты API) или «Команды» → «Сценарии: разбор через Claude API» (план А).
-          Ячейки с уровнями только с картинки бот не торгует, пока вы их не одобрите.</p>
+        <p class="hint">Ячейка — один сценарий автора: монета, сторона, условие входа, стоп и цели.
+          Бот торгует только активные ячейки. Ячейки с уровнями только с картинки он не торгует,
+          пока вы не сверите уровни с картинкой и не нажмёте «Одобрить». Новые посты скачиваются
+          и разбираются на вкладке «Старт».</p>
         <h3>Ячейки <label class="hint"><input type="checkbox" id="sc-cancelled"> показать отменённые</label></h3>
         <div id="sc-cells"></div>
         <h3>Бэктест поста</h3>
@@ -1215,17 +1342,22 @@
   }
 
   setInterval(async () => {
-    if (app.tab === "bots") { await refreshBots(); const t = $("bp-table"); if (t) { t.innerHTML = botTable(app.bots, true); bindBotButtons(t, renderBotsPage); } loadCliBot(); }
+    if (app.tab === "home" && $("h-bots-table")) {
+      await refreshBots();
+      const list = app.bots.filter((b) => b.strategy === TG);
+      if (list.length) { $("h-bots-table").innerHTML = botTable(list, false); bindBotButtons($("h-bots-table"), renderHome); }
+    }
+    else if (app.tab === "bots") { await refreshBots(); const t = $("bp-table"); if (t) { t.innerHTML = botTable(app.bots, true); bindBotButtons(t, renderBotsPage); } loadCliBot(); }
     else if (app.views[app.tab] && app.views[app.tab].sub === "bots") { await refreshBots(); renderStrategyBots(app.views[app.tab]); }
   }, 10000);
 
   (async () => {
     await loadMeta();
     await Promise.all([refreshBacktests(), refreshBots()]);
-    let start = "overview";
-    try { start = localStorage.getItem("bot.tab") || "overview"; } catch (e) { /* нет localStorage */ }
-    const known = ["overview", "bots", "data", "journals", "commands", "telegram", "scenarios", ...app.strategies.map((s) => s.name)];
-    openTab(known.includes(start) ? start : "overview");
+    let start = "home";
+    try { start = localStorage.getItem("bot.tab") || "home"; } catch (e) { /* нет localStorage */ }
+    const known = ["home", "bots", "data", "journals", "commands", "scenarios", TG];
+    openTab(known.includes(start) ? start : "home");
   })();
   </script>
 </body>

@@ -37,7 +37,7 @@ from bot.app.charts import (  # chart_bars — для совместимости
 from bot.app.commands import CommandRunner, catalog
 from bot.app.jobs import Job, JobRunner, RunFn
 from bot.app.refresh import CandleRefresher
-from bot.app.scenarios import MEDIA_RE, cells, posts_feed
+from bot.app.scenarios import MEDIA_RE, cells, pipeline_status, posts_feed
 from bot.app.symbols import SymbolBook, coverage
 from bot.core.db import connect, db_path
 from bot.core.journal import read_journal
@@ -209,7 +209,10 @@ def create_app(
     commands: CommandRunner | None = None,
     journal_dir: Path | None = None,
     post_backtest: PostBacktest | None = None,
+    channel: str | None = None,
+    scenario_symbols: list[str] | None = None,
 ) -> FastAPI:
+    """channel и scenario_symbols — канал и белый список монет сценариев (для «Старта»)."""
     app = FastAPI(title="Bot")
     backtests_root = backtests_dir if backtests_dir is not None else storage.root / "backtests"
     jobs = jobs or JobRunner()
@@ -489,6 +492,14 @@ def create_app(
             "posts": posts_feed(storage.root, limit),
         }
 
+    @app.get("/api/scenarios/status")
+    def get_scenarios_status() -> dict[str, Any]:
+        return {
+            **pipeline_status(storage.root, channel),
+            "channel": channel,
+            "symbols": scenario_symbols if scenario_symbols is not None else symbols,
+        }
+
     @app.post("/api/scenarios/backtest")
     def run_post_backtest(request: PostBacktestRequest) -> dict[str, Any]:
         if post_backtest is None:
@@ -760,6 +771,8 @@ def main() -> None:
         commands=commands,
         journal_dir=journal_dir,
         post_backtest=post_backtest,
+        channel=cfg.scenarios.channel,
+        scenario_symbols=cfg.scenarios.symbols,
     )
     host.autostart()
     print(f"Откройте http://{cfg.app.host}:{cfg.app.port}  (остановить: Ctrl+C)")
