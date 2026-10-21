@@ -174,20 +174,19 @@ def test_strategies_and_run_job(tmp_path: Path) -> None:
     client = TestClient(create_app(storage, ["BTCUSDT"], run=fake_run))
     catalog = client.get("/api/strategies").json()["strategies"]
     names = [s["name"] for s in catalog]
-    assert "mean_reversion" in names
-    mr = next(s for s in catalog if s["name"] == "mean_reversion")
-    assert mr["params"]["adx_max"] == 20.0
-    assert any("RSI" in label for label in mr["indicators"])
-    assert "Mean Reversion" in mr["description"]
+    assert "telegram_scenario" in names
+    tg = next(s for s in catalog if s["name"] == "telegram_scenario")
+    assert tg["params"]["latency_minutes"] == 5
+    assert "Telegram" in tg["description"]
 
-    body = {"strategy": "breakout", "symbol": "BTCUSDT", "params": {"take_r": 3}}
+    body = {"strategy": "telegram_scenario", "symbol": "BTCUSDT", "params": {"stop_atr": 3}}
     job_id = client.post("/api/backtests/run", json=body).json()["job_id"]
     job = wait_job(client, job_id)
     assert job["status"] == "done"
     assert job["backtest_id"] == "20261012-120000_breakout_BTCUSDT_1h"
     assert any("считаю" in line for line in job["log"])
     assert calls[0]["start"] == "2021-01-01" and calls[0]["end"] == "2024-06-30"
-    assert calls[0]["params"] == {"take_r": 3}
+    assert calls[0]["params"] == {"stop_atr": 3}
 
     assert (
         client.post("/api/backtests/run", json={"strategy": "x", "symbol": "BTCUSDT"}).status_code
@@ -200,7 +199,7 @@ def test_run_job_custom_period_and_holdout(tmp_path: Path) -> None:
         return "20261012-120000_breakout_BTCUSDT_1h"
 
     client = TestClient(create_app(Storage(tmp_path), ["BTCUSDT"], run=fake_run))
-    base = {"strategy": "breakout", "symbol": "BTCUSDT"}
+    base = {"strategy": "telegram_scenario", "symbol": "BTCUSDT"}
     # Свой период вне hold-out — без вопросов
     period = {"start": "2023-03-01", "end": "2023-05-31"}
     ok = client.post("/api/backtests/run", json={**base, **period})

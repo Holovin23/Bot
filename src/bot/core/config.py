@@ -80,11 +80,9 @@ class LimitsConfig(BaseModel):
     default_min_rr: float = Field(default=1.5, ge=1.0)
     # Этап 8 (реальный счёт): дневной убыток останавливает торговлю до ручного /resume
     daily_loss_halts: bool = False
-    # Для отдельных стратегий (05, проверка 2): Mean Reversion — 1,0. random_entry —
-    # исследовательская база, в сравнении получает R:R той стратегии, которую изображает.
-    min_rr: dict[str, float] = Field(
-        default_factory=lambda: {"mean_reversion": 1.0, "random_entry": 1.0}
-    )
+    # Для отдельных стратегий (05, проверка 2). random_entry — исследовательская база,
+    # в сравнении получает R:R той стратегии, которую изображает.
+    min_rr: dict[str, float] = Field(default_factory=lambda: {"random_entry": 1.0})
 
     @field_validator("min_rr")
     @classmethod
@@ -103,6 +101,15 @@ class LiveRiskConfig(BaseModel):
     max_total_risk: float = Field(default=0.005, gt=0, le=0.015)
     daily_loss: float = Field(default=0.01, gt=0, le=0.02)
     max_drawdown: float = Field(default=0.05, gt=0, le=0.10)
+
+
+class ScenariosConfig(BaseModel):
+    """Сценарии из Telegram-канала (docs/10). symbols — белый список монет: сценарии по
+    другим монетам отклоняются. Для торговли монета нужна и в instruments."""
+
+    channel: str = "Prizrak_trade"
+    symbols: list[str] = Field(default_factory=lambda: ["BTCUSDT", "ETHUSDT"])
+    model: str = "claude-opus-5-5"
 
 
 class Secrets(BaseSettings):
@@ -144,6 +151,7 @@ class Config(BaseModel):
     risk: RiskConfig = Field(default_factory=RiskConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     live_risk: LiveRiskConfig = Field(default_factory=LiveRiskConfig)
+    scenarios: ScenariosConfig = Field(default_factory=ScenariosConfig)
     secrets: Secrets
 
     def for_live(self) -> Config:

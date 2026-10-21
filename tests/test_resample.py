@@ -81,3 +81,21 @@ def test_gap_inside_period_still_aggregates() -> None:
     assert len(out) == 2
     assert out.iloc[0].low == 99  # минимум 98 был в пропавшей свече
     assert out.iloc[0].volume == 5
+
+
+def test_with_funding_rate_uses_rate_known_at_bar_close() -> None:
+    from bot.data.resample import with_funding_rate
+
+    bars = pd.DataFrame(
+        {"open_time": pd.date_range("2024-01-01", periods=3, freq="4h", tz="UTC"), "close": 1.0}
+    )
+    funding = pd.DataFrame(
+        {
+            "time": pd.to_datetime(["2024-01-01 00:00", "2024-01-01 08:00"], utc=True),
+            "funding_rate": [0.0001, 0.0005],
+        }
+    )
+    # Закрытия 04:00, 08:00, 12:00: ставка 00:00, затем выплаченная ровно в 08:00
+    out = with_funding_rate(bars, funding, "4h")
+    assert out["funding_rate"].tolist() == [0.0001, 0.0005, 0.0005]
+    assert with_funding_rate(bars, None, "4h")["funding_rate"].isna().all()

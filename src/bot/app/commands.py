@@ -25,7 +25,7 @@ from bot.app.jobs import Job, JobRunner
 from bot.core.config import PROJECT_ROOT
 from bot.strategies.registry import STRATEGIES
 
-TIMEFRAMES = ("1m", "5m", "15m", "1h", "4h")
+TIMEFRAMES = ("1m", "5m", "15m", "1h", "4h", "1d")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 KV_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=[^\n\r]{0,200}$")
 TEXT_RE = re.compile(r"^[^\n\r\-][^\n\r]{0,199}$")  # не с «-»: иначе это был бы новый флаг
@@ -146,8 +146,19 @@ COMMANDS: tuple[Command, ...] = (
     ),
     Command("telegram", "Скачать посты канала", "Telegram",
             ("-m", "bot.analyzer.telegram_reader"),
-            (Arg("--channel", "Канал", "text", required=True, help="имя без @ или ссылка"),),
+            (Arg("--channel", "Канал", "text", help="имя без @ или ссылка; пусто — из настроек"),
+             Arg("--since", "Не раньше даты (UTC)", "date", help="пусто — вся история канала"),
+             Arg("--every", "Повторять каждые N минут", "float",
+                 help="пусто — один раз; задача идёт, пока её не остановить")),
             "Первый вход в Telegram спрашивает код — его нужно один раз ввести в терминале."),
+    Command("scenarios_parse", "Сценарии: разбор через Claude API", "Telegram",
+            ("-m", "bot.scenarios", "parse"),
+            (Arg("--limit", "Сколько постов", "int", default=20),
+             Arg("--model", "Модель", "text", help="пусто — scenarios.model из настроек")),
+            "План А, платно: нужен ANTHROPIC_API_KEY. План Б — скилл telegram-scenarios "
+            "в Claude Code."),
+    Command("scenarios_list", "Сценарии: активные ячейки", "Telegram",
+            ("-m", "bot.scenarios", "list")),
     Command(
         "llm_parse", "Разбор постов Claude", "Telegram", ("-m", "bot.analyzer.llm_parser"),
         (Arg("--parse", "Разобрать новые посты", "flag"),

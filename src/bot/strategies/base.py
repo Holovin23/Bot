@@ -178,6 +178,11 @@ class BaseStrategy:
         """Индикаторы, с которыми работает стратегия, — для графика."""
         return []
 
+    def backtest_only(self) -> list[str]:
+        """Включённые опции, которые пока есть только в бэктесте: живой бот с ними
+        не запустится, чтобы paper и демо не расходились с бэктестом."""
+        return []
+
     def signal(
         self,
         ctx: MarketContext,
@@ -187,9 +192,11 @@ class BaseStrategy:
         time_stop_bars: int | None = None,
         reason: str = "",
         features: dict[str, Any] | None = None,
+        limit_price: float | None = None,
     ) -> Signal:
-        """Рыночный сигнал на закрытии текущей свечи; entry_price — её close
-        (оценка: реальный вход будет по открытию следующей свечи)."""
+        """Сигнал на закрытии текущей свечи. Без limit_price — рыночный вход, entry_price —
+        close (оценка: реальный вход будет по открытию следующей свечи). С limit_price —
+        лимитный ордер по этой цене, действует одну следующую свечу."""
         return Signal.create(
             strategy=self.name,
             strategy_version=self.version,
@@ -197,10 +204,10 @@ class BaseStrategy:
             timeframe=self.timeframe,
             bar_time=ctx.time,
             side=side,
-            entry_price=ctx.value("close"),
+            entry_price=ctx.value("close") if limit_price is None else limit_price,
             stop_loss=stop_loss,
             take_profit=take_profit,
-            entry_type=EntryType.MARKET,
+            entry_type=EntryType.MARKET if limit_price is None else EntryType.LIMIT,
             time_stop_bars=time_stop_bars,
             reason=reason,
             features=features or {},

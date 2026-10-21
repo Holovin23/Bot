@@ -19,6 +19,7 @@ import pandas as pd
 from bot.backtest.costs import CostModel
 from bot.backtest.engine import BacktestTrade, run_backtest
 from bot.core.config import Config
+from bot.core.timeframes import timeframe_minutes
 from bot.research.grid import run_grid
 from bot.research.robustness import TradeStats, plateau_scores, trade_stats
 from bot.strategies.base import Strategy
@@ -77,6 +78,13 @@ def backtest_window(
     return strategy_window(strategy, symbol, candles_1m, cfg, start, end, funding)
 
 
+def warmup_for(strategy: Strategy) -> pd.Timedelta:
+    """Запас истории перед окном: не меньше WARMUP и не меньше 1,5 × required_history
+    свечей стратегии (EMA200 на 4h — 50 дней, канал 55 дней на 1d — 84 дня)."""
+    bars = strategy.required_history() * 1.5
+    return max(WARMUP, pd.Timedelta(minutes=timeframe_minutes(strategy.timeframe) * bars))
+
+
 def strategy_window(
     strategy: Strategy,
     symbol: str,
@@ -87,8 +95,9 @@ def strategy_window(
     funding: pd.DataFrame | None = None,
 ) -> list[BacktestTrade]:
     """То же, что backtest_window, для готового объекта стратегии (например, с фильтром)."""
-    candles = _slice(candles_1m, "open_time", start - WARMUP, end)
-    fund = None if funding is None else _slice(funding, "time", start - WARMUP, end)
+    warmup = warmup_for(strategy)
+    candles = _slice(candles_1m, "open_time", start - warmup, end)
+    fund = None if funding is None else _slice(funding, "time", start - warmup, end)
     result = run_backtest(
         strategy,
         symbol,

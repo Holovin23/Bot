@@ -1,6 +1,6 @@
 """Проверка стратегии на новых данных (этап 4).
 
-    uv run python -m bot.research.validate --strategy mean_reversion --symbol BTCUSDT \\
+    uv run python -m bot.research.validate --strategy telegram_scenario --symbol BTCUSDT \\
         --timeframe 1h --stage validation
     ... --stage walk-forward --grid adx_max=15,20,25 --grid bb_std=2,2.5
     ... --stage holdout            (один раз!)

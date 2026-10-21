@@ -1,7 +1,7 @@
 """Эксперимент по стратегии на in-sample: бэктест, проверка на заглядывание вперёд,
 сравнение со случайными входами и buy & hold, отчёт и запись в журнал.
 
-    uv run python -m bot.research.experiment --strategy mean_reversion --symbol BTCUSDT \\
+    uv run python -m bot.research.experiment --strategy telegram_scenario --symbol BTCUSDT \\
         --timeframe 1h
     uv run python -m bot.research.experiment --all
 
@@ -37,7 +37,7 @@ from bot.strategies.registry import STRATEGIES, create_strategy
 
 IN_SAMPLE_START = "2021-01-01"
 IN_SAMPLE_END = "2024-06-30"  # включительно
-ALL_STRATEGIES = ("trend_following", "mean_reversion", "breakout")
+ALL_STRATEGIES = ("telegram_scenario",)
 ALL_TIMEFRAMES = ("5m", "15m", "1h")
 
 # Критерии in-sample (docs/01-goals.md, docs/04-backtesting-guide.md)
@@ -54,25 +54,10 @@ LOOKAHEAD_BARS = 5000  # окно последних свечей для про�
 LOOKAHEAD_CUT = 0.8  # обрезка на 80% окна
 
 HYPOTHESES: dict[str, tuple[str, str]] = {
-    "trend_following": (
-        "в восходящем тренде (EMA50 > EMA200, close > EMA200) откат к EMA20 с закрытием "
-        "выше неё продолжается движением по тренду; выход трейлингом 3 × ATR(22)",
-        "тренды в крипте длятся долго, откат даёт вход с коротким стопом",
-    ),
-    "mean_reversion": (
-        "в боковике (ADX < 20) закрытие за нижней полосой BB(20, 2) при RSI < 30 "
-        "возвращается к средней линии в течение 24 свечей",
-        "краткосрочные перекосы ликвидности и ликвидации без смены режима",
-    ),
-    "composite": (
-        "выбор стратегии по режиму рынка (MR в боковике, TF в тренде) лучше, чем те же "
-        "стратегии без учёта режима",
-        "каждая стратегия работает в своих условиях и теряет в чужих",
-    ),
-    "breakout": (
-        "после сжатия (ширина BB в нижних 10% за 100 свечей) пробой максимума 20 свечей "
-        "на объёме > 1,5 × среднего продолжается на 2R в течение 48 свечей",
-        "сжатие волатильности сменяется её расширением, объём подтверждает пробой",
+    "telegram_scenario": (
+        "сценарии автора канала (уровень, условие входа, стоп, цели), исполненные по "
+        "закрытым свечам после публикации поста, дают прибыль после расходов",
+        "автор видит уровни и контекст, которых нет в простых индикаторах",
     ),
 }
 

@@ -55,7 +55,15 @@ limits:
   max_cost_share: 0.2
   stale_bars: 2
   default_min_rr: 1.5
-  min_rr: {mean_reversion: 1.0, random_entry: 1.0}
+  min_rr: {random_entry: 1.0, telegram_scenario: 2.0}
+
+# Сценарии из Telegram-канала (docs/10-telegram-scenarios-plan.md).
+# symbols — белый список: сценарии по другим монетам отклоняются. Чтобы торговать
+# монетой, она должна быть и в instruments (или добавлена из веб-интерфейса).
+scenarios:
+  channel: Prizrak_trade
+  symbols: [BTCUSDT, ETHUSDT]
+  model: claude-opus-5-5   # для плана А (Claude API); claude-sonnet-5-5 дешевле вдвое
 
 # Этап 8: профиль риска реального счёта (используется только в режиме live, который
 # выключен по умолчанию). Код не примет значения мягче указанных здесь границ.

@@ -73,12 +73,12 @@ def test_signal_checks_hand_examples() -> None:
     assert signal_checks(signal(), 300, COSTS, LIMITS) == []
     # Цель 650: R:R 1,44 < 1,5
     assert signal_checks(signal(tp=66100), 300, COSTS, LIMITS)[0].startswith("2:")
-    # Для Mean Reversion минимальный R:R 1,0 — та же цель проходит (издержки 111/650 = 17%)
-    assert signal_checks(signal(tp=66100, strategy="mean_reversion"), 300, COSTS, LIMITS) == []
+    # Для random_entry минимальный R:R 1,0 — та же цель проходит (издержки 111/650 = 17%)
+    assert signal_checks(signal(tp=66100, strategy="random_entry"), 300, COSTS, LIMITS) == []
     # Цель 550: издержки 111/550 = 20,2% — уже не проходит проверку 12
     assert any(
         r.startswith("12:")
-        for r in signal_checks(signal(tp=66000, strategy="mean_reversion"), 300, COSTS, LIMITS)
+        for r in signal_checks(signal(tp=66000, strategy="random_entry"), 300, COSTS, LIMITS)
     )
     # Стоп 450 = 4,5 ATR при ATR 100 — дальше 4 ATR; 0,45 ATR при ATR 1000 — ближе 0,5
     assert any(r.startswith("3:") for r in signal_checks(signal(), 100, COSTS, LIMITS))

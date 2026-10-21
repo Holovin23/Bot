@@ -22,8 +22,13 @@ history_days: 30
 # ml_filter: true — использовать модель data/models/<стратегия>_<символ>_<таймфрейм>.joblib
 # (включать, только если фильтр признан полезным на validation).
 instances:
-  - strategy: breakout
+  - strategy: telegram_scenario
     symbol: BTCUSDT
+    timeframe: 1h
+    params: {}
+    ml_filter: false
+  - strategy: telegram_scenario
+    symbol: ETHUSDT
     timeframe: 1h
     params: {}
     ml_filter: false

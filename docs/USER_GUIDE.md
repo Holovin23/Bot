@@ -4,6 +4,11 @@
 
 > **Как вводить команды.** Откройте папку проекта в VS Code (File → Open Folder → `D:\Github\Bot`), затем откройте терминал: меню **Terminal → New Terminal**. Внизу появится окно PowerShell, строка начинается с `PS D:\Github\Bot>`. Вставьте туда команду (правый клик или `Ctrl+V`) и нажмите `Enter`. Остановить работающую команду — `Ctrl+C`.
 
+> **Обновление 2026-10-21.** Бот торгует только по сценариям из Telegram-канала; стратегии Trend Following,
+> Mean Reversion, Composite и Daily Momentum удалены. Вкладки интерфейса теперь: «Старт», «Сценарии»,
+> «График и бэктест», «Боты», «Данные», «Журналы», «Команды». Разделы ниже про удалённые стратегии и
+> старые вкладки устарели; как всё работает сейчас — в [HOW_IT_WORKS.md](HOW_IT_WORKS.md).
+
 ## Содержание
 
 - [Часть 1. Установка (один раз)](#часть-1-установка-один-раз)
@@ -290,7 +295,7 @@ uv run python -m bot.app.api
 | Вкладка | Что там |
 |---------|---------|
 | **Обзор** | Общий график: EMA 20/50/200 и Bollinger (20, 2), список всех бэктестов |
-| **Trend Following**, **Mean Reversion**, **Breakout**, **Composite**, **Random (база)** | Вкладка своей стратегии: график с **индикаторами этой стратегии**, бэктест, сделки, капитал, отчёт, paper-боты стратегии, описание правил. Зелёная точка у названия — работает paper-бот этой стратегии |
+| **Trend Following**, **Daily Momentum**, **Mean Reversion**, **Composite**, **Random (база)** | Вкладка своей стратегии: график с **индикаторами этой стратегии**, бэктест, сделки, капитал, отчёт, paper-боты стратегии, описание правил. Зелёная точка у названия — работает paper-бот этой стратегии |
 | **Боты** | Все paper-боты интерфейса, аварийная остановка всего, состояние бота из терминала (paper/demo/live) |
 | **Данные** | Монеты: какие есть, с какого и по какое время скачаны свечи; добавить новую монету; загрузить историю за любой период |
 | **Журналы** | Подробные журналы (JSON Lines) ботов и бэктестов — для разбора и для проверки ИИ |
@@ -316,8 +321,8 @@ uv run python -m bot.app.api
 |-----------|-----------------|---------------------|
 | Trend Following | EMA 20 / 50 / 200 | ATR(14) для стопа и ATR(22) для трейлинга |
 | Mean Reversion | Bollinger: верх, середина (это тейк), низ | RSI(14) с уровнями 30/70; ADX(14) с уровнем 20 (ниже — боковик) |
-| Breakout | Максимум и минимум 20 предыдущих свечей | «Сжатие» — ранг ширины Bollinger за 100 свечей с уровнем 0,10; объём и порог объёма (средний × 1,5) |
-| Composite | Индикаторы всех трёх стратегий | Режим рынка (0 — боковик, 1 — тренд вверх, 2 — тренд вниз, 3 — высокая волатильность) и панели входящих стратегий |
+| Daily Momentum | Канал входа: максимум и минимум 55 свечей; канал выхода: 20 свечей | ATR(20) для стопа |
+| Composite | Индикаторы обеих стратегий | Режим рынка (0 — боковик, 1 — тренд вверх, 2 — тренд вниз, 3 — высокая волатильность) и панели входящих стратегий |
 | Random | — | ATR(14) |
 
 Если изменить параметры стратегии во вкладке «Бэктест» и нажать **«Параметры → график»**, индикаторы перерисуются с новыми значениями (например, `adx_max=25` сдвинет уровень на панели ADX).
@@ -415,20 +420,20 @@ uv run python -m bot.app.api
 
 | Имя | Идея | Главные параметры |
 |-----|------|-------------------|
-| `trend_following` | Торговля по тренду: EMA50 выше EMA200 и откат к EMA20 → лонг (шорт зеркально). Стоп 2 ATR, выход по трейлинг-стопу | `ema_fast`=20, `ema_mid`=50, `ema_slow`=200, `stop_atr`=2.0, `trail_atr`=3.0, `allow_short` |
+| `trend_following` | Торговля по тренду: EMA50 выше EMA200 и откат к EMA20 → лонг (шорт зеркально). Стоп 2 ATR, выход по трейлинг-стопу. Опции только для бэктеста (живой бот с ними не запустится): `entry=limit` — вход лимитным ордером (комиссия maker), `funding_max` — не входить в сторону, которая платит funding выше порога | `ema_fast`=20, `ema_mid`=50, `ema_slow`=200, `stop_atr`=2.0, `trail_atr`=3.0, `allow_short`, `entry`=market, `limit_offset_atr`=0, `funding_max`=0 (выключен) |
+| `time_series_momentum` | Дневной импульс, для таймфрейма 1d: закрытие выше максимума 55 свечей → лонг (шорт зеркально). Стоп 2 ATR(20), выход по минимуму 20 свечей | `entry_length`=55, `exit_length`=20, `stop_atr`=2.0, `allow_short` |
 | `mean_reversion` | Возврат к среднему в боковике: ADX < 20, цена за полосой Боллинджера и RSI < 30 → лонг. Тейк — средняя линия, выход по времени через 24 свечи | `bb_std`=2.0, `rsi_low`=30, `rsi_high`=70, `adx_max`=20, `stop_atr`=1.5, `time_stop_bars`=24 |
-| `breakout` | Пробой после сжатия: узкие полосы Боллинджера, пробой максимума 20 свечей с объёмом > 1,5× среднего. Тейк 2R | `squeeze_percentile`=0.10, `channel_length`=20, `volume_mult`=1.5, `take_r`=2.0, `time_stop_bars`=48 |
-| `composite` | Переключает три стратегии по режиму рынка: в боковике mean_reversion и breakout, в тренде trend_following | `mode`=regime (или all — без учёта режима) |
+| `composite` | Переключает стратегии по режиму рынка: в боковике mean_reversion, в тренде trend_following | `mode`=regime (или all — без учёта режима) |
 | `random_entry` | Случайные входы. Нужна только для сравнения: стратегия должна быть заметно лучше случая | `probability`, `stop_atr`, `tp_atr`, `seed` |
 
 ### Способ 1. Бэктест из интерфейса
 
-Вкладка нужной стратегии (например, **Breakout**) → над графиком выберите символ и таймфрейм → снизу вкладка **Бэктест** → период и параметры → **Запустить бэктест**. Недостающие данные за период загрузятся сами. Результат откроется на графике, во вкладках «Сделки», «Капитал», «Отчёт» (Часть 5).
+Вкладка нужной стратегии (например, **Trend Following**) → над графиком выберите символ и таймфрейм → снизу вкладка **Бэктест** → период и параметры → **Запустить бэктест**. Недостающие данные за период загрузятся сами. Результат откроется на графике, во вкладках «Сделки», «Капитал», «Отчёт» (Часть 5).
 
 ### Способ 2. Бэктест командой
 
 ```powershell
-uv run python -m bot.backtest.report --strategy breakout --symbol BTCUSDT --timeframe 1h --from 2021-01-01 --to 2024-06-30
+uv run python -m bot.backtest.report --strategy trend_following --symbol BTCUSDT --timeframe 4h --from 2021-01-01 --to 2024-06-30
 ```
 
 С изменёнными параметрами — `--param имя=значение`, можно несколько раз:
@@ -489,7 +494,7 @@ uv run python -m bot.research.experiment --all
 uv run python -m bot.research.experiment --strategy mean_reversion --symbol BTCUSDT --grid adx_max=15,20,25 --grid bb_std=2,2.5
 
 # больше прогонов случайных входов для точности
-uv run python -m bot.research.experiment --strategy breakout --symbol ETHUSDT --runs 1000
+uv run python -m bot.research.experiment --strategy trend_following --symbol ETHUSDT --runs 1000
 ```
 
 При переборе (`--grid`) смотрите на тепловую карту в отчёте: хорошие параметры лежат на «плато» — соседние значения тоже дают хороший результат. Одиночный яркий пик — это, скорее всего, случайность.
@@ -509,7 +514,7 @@ uv run python -m bot.research.experiment --strategy breakout --symbol ETHUSDT --
 ### Шаг 7.1. Validation
 
 ```powershell
-uv run python -m bot.research.validate --strategy breakout --symbol BTCUSDT --timeframe 1h --stage validation
+uv run python -m bot.research.validate --strategy trend_following --symbol BTCUSDT --timeframe 4h --stage validation
 ```
 
 Отчёт `validation.md` в `data\backtests\...validation-...\`: метрики in-sample и validation рядом, проверка на втором символе, критерии (PF > 1,1; Expectancy > 0; просадка не больше 1,5 × in-sample; ≥ 30 сделок), Монте-Карло просадки.
@@ -519,13 +524,13 @@ uv run python -m bot.research.validate --strategy breakout --symbol BTCUSDT --ti
 Обучение на 12 месяцах → проверка на следующих 3 → сдвиг на 3 месяца, и так по всей истории до hold-out. Параметры на каждом шаге выбираются заново.
 
 ```powershell
-uv run python -m bot.research.validate --strategy breakout --symbol BTCUSDT --timeframe 1h --stage walk-forward --grid volume_mult=1.2,1.5,2
+uv run python -m bot.research.validate --strategy trend_following --symbol BTCUSDT --timeframe 4h --stage walk-forward --grid stop_atr=2,3
 ```
 
 ### Шаг 7.3. Hold-out — один раз
 
 ```powershell
-uv run python -m bot.research.validate --strategy breakout --symbol BTCUSDT --timeframe 1h --stage holdout --param volume_mult=1.5
+uv run python -m bot.research.validate --strategy trend_following --symbol BTCUSDT --timeframe 4h --stage holdout --param stop_atr=2
 ```
 
 Запуск записывается в `research\holdout-log.md`. Второй раз для той же стратегии, символа и таймфрейма бот откажется (иначе hold-out превращается в ещё одну подгонку). После hold-out стратегию по его итогам не меняют.
@@ -599,9 +604,9 @@ close_unknown: false
 unknown_stop_pct: 0.02
 history_days: 30
 instances:
-  - strategy: breakout
+  - strategy: trend_following
     symbol: BTCUSDT
-    timeframe: 1h
+    timeframe: 4h
     params: {}
     ml_filter: false
 ```
@@ -610,10 +615,10 @@ instances:
 
 ```yaml
 instances:
-  - strategy: breakout
+  - strategy: trend_following
     symbol: BTCUSDT
-    timeframe: 1h
-    params: {volume_mult: 1.5}
+    timeframe: 4h
+    params: {stop_atr: 2.0}
     ml_filter: false
   - strategy: mean_reversion
     symbol: ETHUSDT

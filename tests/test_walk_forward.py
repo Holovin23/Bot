@@ -72,3 +72,15 @@ def test_walk_forward_on_synthetic() -> None:
     assert result.stats is not None
     assert result.stats.trades == sum(result.windows["test_trades"])
     assert result.windows["params"].iloc[0].startswith("stop_atr=")
+
+
+def test_warmup_covers_strategy_history() -> None:
+    from bot.backtest.walk_forward import WARMUP, warmup_for
+    from bot.strategies.registry import create_strategy
+
+    # сценарии 1h: истории нужно меньше 30 дней — остаётся WARMUP
+    assert warmup_for(create_strategy("telegram_scenario", "1h")) == WARMUP
+    # 201 свеча на 4h: 201 × 1,5 × 4 ч = 1206 ч = 50,25 дня — больше WARMUP
+    long_history = create_strategy("telegram_scenario", "4h")
+    long_history.required_history = lambda: 201  # type: ignore[method-assign]
+    assert warmup_for(long_history) == pd.Timedelta(hours=1206)

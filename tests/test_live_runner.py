@@ -184,3 +184,24 @@ def test_live_confirmation_and_account(tmp_path: Path) -> None:
     env.write_text("BYBIT_ENV=live\nALLOW_LIVE=true\n", encoding="utf-8")
     cfg = load_live_account(env)
     assert cfg.risk.risk_per_trade == 0.0025 and cfg.limits.daily_loss_halts
+
+
+def test_live_refuses_backtest_only_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from bot.runner.live import build_strategy
+    from bot.strategies import registry
+    from bot.strategies.random_entry import RandomEntry
+
+    class LimitOnly(RandomEntry):
+        name = "limit_only"
+
+        def backtest_only(self) -> list[str]:
+            return ["entry=limit"] if self.params.get("entry") == "limit" else []
+
+    monkeypatch.setitem(registry.STRATEGIES, "limit_only", LimitOnly)
+    ok = Instance(strategy="telegram_scenario", symbol="BTCUSDT", timeframe="1h")
+    assert build_strategy(ok, tmp_path).name == "telegram_scenario"
+    limit = Instance(strategy="limit_only", symbol="BTCUSDT", params={"entry": "limit"})
+    with pytest.raises(ValueError, match="только в бэктесте"):
+        build_strategy(limit, tmp_path)

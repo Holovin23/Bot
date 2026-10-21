@@ -10,7 +10,7 @@ BAR = datetime(2026, 10, 12, 14, 0, tzinfo=UTC)
 
 def make_signal(**overrides: object) -> Signal:
     params: dict[str, object] = {
-        "strategy": "trend_following",
+        "strategy": "telegram_scenario",
         "strategy_version": "1.0.0",
         "symbol": "BTCUSDT",
         "timeframe": "1h",
@@ -26,7 +26,7 @@ def make_signal(**overrides: object) -> Signal:
 
 def test_same_input_gives_same_signal_id() -> None:
     assert make_signal().signal_id == make_signal().signal_id
-    assert make_signal().signal_id == "tf-BTCUSDT-1h-20261012T1400-L"
+    assert make_signal().signal_id == "ts-BTCUSDT-1h-20261012T1400-L"
 
 
 def test_signal_id_differs_by_bar_side_and_symbol() -> None:
@@ -46,7 +46,7 @@ def test_signal_id_ignores_timezone_of_input() -> None:
 
 
 def test_signal_id_fits_bybit_order_link_id() -> None:
-    signal = make_signal(strategy="mean_reversion", symbol="ETHUSDT", timeframe="15m")
+    signal = make_signal(strategy="random_entry", symbol="ETHUSDT", timeframe="15m")
     assert len(signal.signal_id) <= 36
 
 
