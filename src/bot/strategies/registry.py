@@ -5,19 +5,19 @@ from __future__ import annotations
 from typing import Any
 
 from bot.strategies.base import BaseStrategy
-from bot.strategies.breakout import Breakout
 from bot.strategies.composite import Composite
 from bot.strategies.mean_reversion import MeanReversion
 from bot.strategies.random_entry import RandomEntry
 from bot.strategies.telegram_scenario import TelegramScenario
+from bot.strategies.time_series_momentum import TimeSeriesMomentum
 from bot.strategies.trend_following import TrendFollowing
 
 STRATEGIES: dict[str, type[BaseStrategy]] = {
-    Breakout.name: Breakout,
     Composite.name: Composite,
     MeanReversion.name: MeanReversion,
     RandomEntry.name: RandomEntry,
     TelegramScenario.name: TelegramScenario,
+    TimeSeriesMomentum.name: TimeSeriesMomentum,
     TrendFollowing.name: TrendFollowing,
 }
 

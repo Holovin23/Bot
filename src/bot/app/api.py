@@ -52,7 +52,7 @@ from bot.strategies.registry import STRATEGIES, create_strategy
 __all__ = ["chart_bars", "create_app", "main"]
 
 STATIC_DIR = Path(__file__).parent / "static"
-TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h"]
+TIMEFRAMES = ["1m", "5m", "15m", "1h", "4h", "1d"]
 # Файлы бэктеста, которые можно скачать из интерфейса (для разбора и для ИИ)
 BACKTEST_FILES = {
     "report.md",

@@ -22,8 +22,8 @@ history_days: 30
 # ml_filter: true — использовать модель data/models/<стратегия>_<символ>_<таймфрейм>.joblib
 # (включать, только если фильтр признан полезным на validation).
 instances:
-  - strategy: breakout
+  - strategy: trend_following
     symbol: BTCUSDT
-    timeframe: 1h
+    timeframe: 4h
     params: {}
     ml_filter: false

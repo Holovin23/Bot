@@ -96,3 +96,30 @@ def test_signals_on_random_data_follow_rules_and_no_lookahead() -> None:
         else:
             assert f["ema50"] < f["ema200"] and s.entry_price < f["ema20"]
     assert find_lookahead(strategy, "BTCUSDT", bars, bars["open_time"].iloc[900]) == []
+
+
+def test_limit_entry_below_close() -> None:
+    # Лимит LONG: 101 − 0.25 × ATR 2 = 100.5; стоп считается от close: 101 − 4 = 97
+    strategy = TrendFollowing("1h", {"entry": "limit", "limit_offset_atr": 0.25})
+    (signal,) = strategy.on_bar(ctx_for([bar(100, 102, 99.5, 101)], [UP]))
+    assert signal.entry_type == "LIMIT"
+    assert signal.entry_price == 100.5
+    assert signal.stop_loss == 97
+    (short,) = strategy.on_bar(ctx_for([bar(100, 100.5, 98, 99)], [DOWN]))
+    assert short.entry_price == 99.5  # 99 + 0.5
+    assert strategy.backtest_only() == ["лимитный вход (entry=limit)"]
+    assert TrendFollowing("1h").backtest_only() == []
+
+
+def test_funding_filter_skips_crowded_side() -> None:
+    strategy = TrendFollowing("1h", {"funding_max": 0.0003})
+    long_bar = [bar(100, 102, 99.5, 101)]
+    # funding 0.0005 > 0.0003: лонги переполнены — LONG пропускаем
+    assert strategy.on_bar(ctx_for(long_bar, [{**UP, "funding_rate": 0.0005}])) == []
+    # funding 0.0002 — в пределах, сигнал есть; неизвестный funding (NaN) не фильтрует
+    assert len(strategy.on_bar(ctx_for(long_bar, [{**UP, "funding_rate": 0.0002}]))) == 1
+    assert len(strategy.on_bar(ctx_for(long_bar, [{**UP, "funding_rate": float("nan")}]))) == 1
+    # SHORT пропускаем при funding < −0.0003, при +0.0005 шорт разрешён
+    short_bar = [bar(100, 100.5, 98, 99)]
+    assert strategy.on_bar(ctx_for(short_bar, [{**DOWN, "funding_rate": -0.0005}])) == []
+    assert len(strategy.on_bar(ctx_for(short_bar, [{**DOWN, "funding_rate": 0.0005}]))) == 1
