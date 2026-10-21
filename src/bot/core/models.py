@@ -116,8 +116,8 @@ class Signal(_Frozen):
         """Детерминированный id: одинаковые входные данные -> одинаковый id.
 
         bar_time — время открытия свечи, на закрытии которой появился сигнал.
-        Пример: trend_following, BTCUSDT, 1h, 2026-10-12 14:00 UTC, LONG
-        -> 'tf-BTCUSDT-1h-20261012T1400-L' (используется как orderLinkId).
+        Пример: telegram_scenario, BTCUSDT, 1h, 2026-10-12 14:00 UTC, LONG
+        -> 'ts-BTCUSDT-1h-20261012T1400-L' (используется как orderLinkId).
         """
         if bar_time.tzinfo is None:
             raise ValueError("bar_time должен быть с таймзоной")

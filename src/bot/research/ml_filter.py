@@ -1,6 +1,6 @@
 """Обучение ML-фильтра на in-sample и проверка пользы на validation (этап 6, шаги 2–5).
 
-    uv run python -m bot.research.ml_filter --strategy mean_reversion --symbol BTCUSDT \\
+    uv run python -m bot.research.ml_filter --strategy telegram_scenario --symbol BTCUSDT \\
         --timeframe 1h
 
 Модель сохраняется в data/models/<стратегия>_<символ>_<таймфрейм>.joblib, отчёт —

@@ -6,12 +6,6 @@ symbols: [BTCUSDT, ETHUSDT]
 timeframes: [1h]
 min_dsr: 0.95
 
-strategies:
-  mean_reversion:
-    grid:
-      adx_max: [15, 20, 25]
-      bb_std: [2.0, 2.5]
-  trend_following:
-    grid:
-      stop_atr: [1.5, 2.0, 3.0]
-      trail_atr: [2.0, 3.0]
+# Перебирать параметры имеет смысл у стратегий с параметрами-индикаторами. У сценариев
+# из Telegram параметры — стоп и цель по умолчанию; их сетку добавлять только осознанно.
+strategies: {}

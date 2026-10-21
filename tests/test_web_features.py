@@ -33,21 +33,18 @@ def storage_with_walk(tmp_path: Path, days: int = 20) -> Storage:
 
 def test_strategy_chart_has_own_indicators(tmp_path: Path) -> None:
     client = TestClient(create_app(storage_with_walk(tmp_path), ["BTCUSDT"]))
-    params = {"strategy": "mean_reversion", "symbol": "BTCUSDT", "timeframe": "1h", "limit": 100}
+    params = {"strategy": "random_entry", "symbol": "BTCUSDT", "timeframe": "1h", "limit": 100}
     data = client.get("/api/strategy-chart", params=params).json()
     assert len(data["candles"]) == 100
-    panes = {s["pane"] for s in data["series"]}
-    assert panes == {"price", "RSI", "ADX"}
-    rsi = next(s for s in data["series"] if s["column"] == "rsi")
-    assert rsi["levels"] == [30.0, 70.0]
-    assert len(rsi["values"]) == 100
-    assert all(v is None or 0 <= v <= 100 for v in rsi["values"])
+    assert {s["pane"] for s in data["series"]} == {"ATR"}
+    atr = next(s for s in data["series"] if s["column"] == "atr")
+    assert len(atr["values"]) == 100
+    assert "ATR(14)" in atr["label"]
 
-    # Параметры меняют индикатор: уровень ADX берётся из adx_max
-    params["params"] = json.dumps({"adx_max": 30})
+    # Параметры меняют индикатор: длина ATR берётся из atr_length
+    params["params"] = json.dumps({"atr_length": 20})
     data = client.get("/api/strategy-chart", params=params).json()
-    adx = next(s for s in data["series"] if s["column"] == "adx")
-    assert adx["levels"] == [30.0]
+    assert "ATR(20)" in data["series"][0]["label"]
     params["params"] = "[1]"
     assert client.get("/api/strategy-chart", params=params).status_code == 400
 
@@ -59,22 +56,13 @@ def test_strategy_chart_matches_prepare(tmp_path: Path) -> None:
 
     storage = storage_with_walk(tmp_path)
     client = TestClient(create_app(storage, ["BTCUSDT"]))
-    params = {"strategy": "trend_following", "symbol": "BTCUSDT", "timeframe": "1h", "limit": 50}
+    params = {"strategy": "random_entry", "symbol": "BTCUSDT", "timeframe": "1h", "limit": 50}
     data = client.get("/api/strategy-chart", params=params).json()
     bars = chart_bars(storage.read_candles("BTCUSDT", "1m"), "1h")
-    features = create_strategy("trend_following", "1h").prepare(bars)
-    fast = next(s for s in data["series"] if s["column"] == "ema_fast")["values"]
-    expected = features["ema_fast"].tail(50).round(8).tolist()
-    assert fast == pytest.approx([None if pd.isna(v) else v for v in expected])
-    atr = next(s for s in data["series"] if s["column"] == "atr")
-    assert atr["values"][-1] == pytest.approx(features["atr"].iloc[-1])
-
-
-def test_composite_chart_series_use_member_prefixes() -> None:
-    from bot.strategies.composite import Composite
-
-    columns = {s.column for s in Composite("1h").chart_series()}
-    assert {"regime", "mr__rsi", "tf__ema_fast"} <= columns
+    features = create_strategy("random_entry", "1h").prepare(bars)
+    atr = next(s for s in data["series"] if s["column"] == "atr")["values"]
+    expected = features["atr"].tail(50).round(8).tolist()
+    assert atr == pytest.approx([None if pd.isna(v) else v for v in expected])
 
 
 def test_candles_for_date_range(tmp_path: Path) -> None:
@@ -150,22 +138,22 @@ def test_build_argv_validates_values() -> None:
     argv = build_argv(
         backtest,
         {
-            "--strategy": "trend_following",
+            "--strategy": "telegram_scenario",
             "--symbol": "BTCUSDT",
             "--timeframe": "1h",
             "--from": "2023-01-01",
             "--to": "2023-06-30",
-            "--param": ["stop_atr=3", "trail_atr=4"],
+            "--param": ["stop_buffer_atr=1", "default_rr=3"],
         },
         ["BTCUSDT"],
     )
     assert argv == [
-        "--strategy", "trend_following", "--symbol", "BTCUSDT", "--timeframe", "1h",
+        "--strategy", "telegram_scenario", "--symbol", "BTCUSDT", "--timeframe", "1h",
         "--from", "2023-01-01", "--to", "2023-06-30",
-        "--param", "stop_atr=3", "--param", "trail_atr=4",
+        "--param", "stop_buffer_atr=1", "--param", "default_rr=3",
     ]  # fmt: skip
     with pytest.raises(ValueError, match="Не заполнено"):
-        build_argv(backtest, {"--strategy": "trend_following"}, ["BTCUSDT"])
+        build_argv(backtest, {"--strategy": "telegram_scenario"}, ["BTCUSDT"])
     with pytest.raises(ValueError, match="недопустимое"):
         build_argv(BY_ID["quality"], {"--symbol": ["DOGEUSDT"]}, ["BTCUSDT"])
     with pytest.raises(ValueError, match="ГГГГ"):
@@ -261,9 +249,10 @@ class NoFeed:
 
 
 def test_history_days_covers_strategy_warmup() -> None:
-    assert history_days("mean_reversion", "1h", {}) == 30
-    # EMA200 на 4h — 200 свечей × 4 ч × 1,5 = 50 дней
-    assert history_days("trend_following", "4h", {}) == 52
+    # 15 свечей × 1 ч × 1,5 — меньше минимума: 30 дней
+    assert history_days("telegram_scenario", "1h", {}) == 30
+    # на 1d: 15 × 1,5 = 22,5 дня — тоже 30
+    assert history_days("telegram_scenario", "1d", {}) == 30
 
 
 def test_two_paper_bots_run_side_by_side(tmp_path: Path) -> None:

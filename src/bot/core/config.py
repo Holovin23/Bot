@@ -80,11 +80,9 @@ class LimitsConfig(BaseModel):
     default_min_rr: float = Field(default=1.5, ge=1.0)
     # Этап 8 (реальный счёт): дневной убыток останавливает торговлю до ручного /resume
     daily_loss_halts: bool = False
-    # Для отдельных стратегий (05, проверка 2): Mean Reversion — 1,0. random_entry —
-    # исследовательская база, в сравнении получает R:R той стратегии, которую изображает.
-    min_rr: dict[str, float] = Field(
-        default_factory=lambda: {"mean_reversion": 1.0, "random_entry": 1.0}
-    )
+    # Для отдельных стратегий (05, проверка 2). random_entry — исследовательская база,
+    # в сравнении получает R:R той стратегии, которую изображает.
+    min_rr: dict[str, float] = Field(default_factory=lambda: {"random_entry": 1.0})
 
     @field_validator("min_rr")
     @classmethod

@@ -186,12 +186,22 @@ def test_live_confirmation_and_account(tmp_path: Path) -> None:
     assert cfg.risk.risk_per_trade == 0.0025 and cfg.limits.daily_loss_halts
 
 
-def test_live_refuses_backtest_only_options(tmp_path: Path) -> None:
+def test_live_refuses_backtest_only_options(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from bot.runner.live import build_strategy
+    from bot.strategies import registry
+    from bot.strategies.random_entry import RandomEntry
 
-    ok = Instance(strategy="trend_following", symbol="BTCUSDT", timeframe="4h")
-    assert build_strategy(ok, tmp_path).name == "trend_following"
-    for params in ({"entry": "limit"}, {"funding_max": 0.0003}):
-        instance = ok.model_copy(update={"params": params})
-        with pytest.raises(ValueError, match="только в бэктесте"):
-            build_strategy(instance, tmp_path)
+    class LimitOnly(RandomEntry):
+        name = "limit_only"
+
+        def backtest_only(self) -> list[str]:
+            return ["entry=limit"] if self.params.get("entry") == "limit" else []
+
+    monkeypatch.setitem(registry.STRATEGIES, "limit_only", LimitOnly)
+    ok = Instance(strategy="telegram_scenario", symbol="BTCUSDT", timeframe="1h")
+    assert build_strategy(ok, tmp_path).name == "telegram_scenario"
+    limit = Instance(strategy="limit_only", symbol="BTCUSDT", params={"entry": "limit"})
+    with pytest.raises(ValueError, match="только в бэктесте"):
+        build_strategy(limit, tmp_path)
